@@ -1,0 +1,17 @@
+✔ deterministic compiler parity, no generated recall ids or footer (57.621125ms)
+✔ worker runs under eval launch without inheriting incompatible flags (243.6025ms)
+✔ old native prose is unchanged; repeated compaction compiles fresh messages only (3.71225ms)
+✔ PiP skips without reading input or calling compiler; missing API declines (0.211375ms)
+✔ errors, empty, oversized and non-shrinking summaries decline visibly, never use models (24.139583ms)
+✔ multi-megabyte tool results decline before worker, source is not truncated (0.269041ms)
+✔ malformed prior marker declines, and instructions are visibly not interpreted (25.625291ms)
+✔ bundle has no memory runtime, external packages, subprocesses, or network code (1.862542ms)
+✔ real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP (3155.994833ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4384.046125

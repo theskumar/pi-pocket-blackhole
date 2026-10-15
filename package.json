@@ -1,0 +1,9 @@
+{
+  "name": "pi-pocket-blackhole-adapter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test blackhole.test.ts"
+  }
+}
