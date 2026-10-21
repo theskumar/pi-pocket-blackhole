@@ -1,19 +1,24 @@
-/** Compile ordinary sessions into deterministic Blackhole summaries without model requests. */
+/** Compile ordinary sessions into deterministic Blackhole summaries without model requests, with a recall tool for the originals. */
 import { Worker } from 'node:worker_threads';
-import { AgentDoc, CompactionEntry, CompactionTask, defineExtension, hook } from '@earendil-works/pi-durable';
-import type { CompactionHooks } from '@earendil-works/pi-durable';
+import { AgentDoc, CompactionEntry, CompactionTask, defineExtension, defineTool, hook } from '@earendil-works/pi-durable';
+import type { CompactionHooks, EntryId, EntryRecord, ToolExecutionApi, Tx } from '@earendil-works/pi-durable';
+import { Type } from '@earendil-works/pi-ai';
 import type { Message } from '@earendil-works/pi-ai';
 import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate';
 import type { PocketHost } from '/Users/theskumar/code/pi-pocket/src/server/host.ts';
 
 type Input = Parameters<CompactionHooks['beforeCompact']>[0];
-type CompilerInput = { messages: Message[]; sourceIndices: undefined[]; cwd: string };
+type CompilerInput = { messages: Message[]; sourceIndices: (number | undefined)[]; cwd: string };
 type Compiler = (input: CompilerInput) => Promise<string>;
 type Host = Pick<PocketHost, 'pip' | 'notice'>;
 const PREFIX = 'The conversation history before this point was compacted into the following summary:\n\n<summary>\n';
 const SUFFIX = '\n</summary>';
 export const MAX_SOURCE_CHARS = 8 * 1024 * 1024;
 export const MAX_SUMMARY_CHARS = 1024 * 1024;
+export const RECALL_TOOL = 'blackhole_recall';
+// One trailing note per summary. Each compaction moves it to the new end.
+export const RECALL_NOTE = `Refs like (#N) are ids of original messages. Call \`${RECALL_TOOL}\` with ids [N] to read one in full, or with a query to search history that is no longer in context. Do not redo completed work.`;
+const SEPARATOR = '\n\n---\n\n';
 
 // Bound both the structured-clone payload and traversal before starting a worker.
 // Images and tool arguments count too. A large source is declined, never truncated.
@@ -96,14 +101,15 @@ export function createBeforeCompact(host: Host, compiler: Compiler = compileInWo
             const agent = await api.snapshot(AgentDoc, api.conversationId, context);
             const segment = await compiler({
                 messages: [...fresh],
-                // Pocket entry ids are not Blackhole recall ids. Disable all generated refs.
-                sourceIndices: Array(fresh.length).fill(undefined),
+                // Refs are Pocket entry ids, which blackhole_recall resolves.
+                sourceIndices: sourceIds(input.entries, fresh),
                 cwd: agent?.cwd ?? process.cwd(),
             });
             if (!segment.trim()) {
                 throw new Error('compiler returned an empty summary');
             }
-            const summary = previous ? `${previous}\n\n---\n\n${segment}` : segment;
+            const body = previous ? `${previous}${SEPARATOR}${segment}` : segment;
+            const summary = `${body}${SEPARATOR}${RECALL_NOTE}`;
             if (summary.length > MAX_SUMMARY_CHARS) {
                 throw new Error('summary exceeds 1 MiB character limit');
             }
@@ -128,6 +134,33 @@ export function createBeforeCompact(host: Host, compiler: Compiler = compileInWo
     };
 }
 
+/**
+ * The entry id of each fresh message, or undefined (no ref) when unsure. Messages are the same frozen objects as the
+ * entries' model messages, so identity maps them. Messages that an edit replaced, synthesized missing tool results,
+ * and summary markers map to nothing.
+ */
+export function sourceIds(entries: readonly EntryRecord[], fresh: readonly Message[]): (number | undefined)[] {
+    const owner = new Map<Message, number>();
+    const ambiguous = new Set<Message>();
+    for (const entry of entries) {
+        if (entry.head !== undefined) {
+            continue;
+        }
+        for (const message of entry.model ?? []) {
+            if (owner.has(message)) {
+                ambiguous.add(message);
+            }
+            owner.set(message, Number(entry.id));
+        }
+    }
+    return fresh.map((message) => (ambiguous.has(message) ? undefined : owner.get(message)));
+}
+
+function stripRecallNote(text: string): string {
+    const note = SEPARATOR + RECALL_NOTE;
+    return text.endsWith(note) ? text.slice(0, -note.length) : text;
+}
+
 function splitPrevious(input: Input): { previous: string; fresh: readonly Message[] } {
     if (!CompactionEntry.is(input.entries[0])) {
         return { previous: '', fresh: input.messages };
@@ -149,13 +182,187 @@ function splitPrevious(input: Input): { previous: string; fresh: readonly Messag
     if (!text.startsWith(PREFIX) || !text.endsWith(SUFFIX)) {
         throw new Error('unrecognized previous summary wrapper');
     }
-    // Keep native prose and prior segments byte-for-byte, without recompiling them.
-    return { previous: text.slice(PREFIX.length, -SUFFIX.length), fresh: input.messages.slice(1) };
+    // Keep native prose and prior segments byte-for-byte, without recompiling them. Only this adapter's own
+    // trailing recall note is removed, and the new summary adds it back at its end.
+    return { previous: stripRecallNote(text.slice(PREFIX.length, -SUFFIX.length)), fresh: input.messages.slice(1) };
 }
+
+// ── Recall ──────────────────────────────────────────────────────────────
+
+export const MAX_RECALL_CHARS = 24_000;
+const MAX_IDS = 20;
+const MAX_SCAN_ENTRIES = 10_000;
+const MAX_SEARCH_TEXT = 1024 * 1024;
+const PAGE_SIZE = 10;
+const SCAN_PAGE = 256;
+const SNIPPET = 160;
+
+type Reader = Pick<ToolExecutionApi, 'conversationId' | 'commit'>;
+type Context = Parameters<ToolExecutionApi['commit']>[1];
+
+function partText(part: { type: string; text?: string; name?: string; arguments?: unknown }): string {
+    if (part.type === 'text') {
+        return part.text ?? '';
+    }
+    if (part.type === 'toolCall') {
+        return `[tool call] ${part.name}(${JSON.stringify(part.arguments ?? {})})`;
+    }
+    if (part.type === 'image') {
+        return '[image]';
+    }
+    // Thinking is private reasoning, often redacted or signed: never replayed.
+    return '';
+}
+
+/** The model-facing text of one entry, as plain text. Undefined for entries without model messages. */
+export function entryText(entry: EntryRecord): string | undefined {
+    const messages = entry.model ?? [];
+    if (messages.length === 0) {
+        return undefined;
+    }
+    return messages.map((message) => {
+        const content = message.content as string | { type: string }[];
+        const body = typeof content === 'string'
+            ? content
+            : content.map((part) => partText(part)).filter(Boolean).join('\n');
+        const label = message.role === 'toolResult'
+            ? `[tool result: ${message.toolName}${message.isError ? ', error' : ''}]`
+            : `[${message.role}]`;
+        return `${label}\n${body}`;
+    }).join('\n\n');
+}
+
+/** A visible entry of the conversation: its own, or one a fork inherited. Never another session's. */
+async function visibleEntry(api: Reader, id: number, context: Context): Promise<EntryRecord | undefined> {
+    return api.commit(async (tx: Tx) => {
+        const page = await tx.scanEntries({
+            conversationId: api.conversationId,
+            minEntryId: id as EntryId,
+            maxEntryId: id as EntryId,
+        }, 1);
+        return page.items[0];
+    }, context);
+}
+
+async function expand(api: Reader, ids: readonly number[], offset: number, budget: number, context: Context): Promise<string> {
+    const share = Math.floor(budget / ids.length);
+    const blocks: string[] = [];
+    for (const id of ids) {
+        const entry = await visibleEntry(api, id, context);
+        const text = entry === undefined ? undefined : entryText(entry);
+        if (text === undefined) {
+            blocks.push(`#${id}: not found in this session's history.`);
+            continue;
+        }
+        const start = Math.min(offset, text.length);
+        const end = Math.min(text.length, start + share);
+        let block = `#${id} (chars ${start}-${end} of ${text.length})\n${text.slice(start, end)}`;
+        if (end < text.length) {
+            block += `\n… [truncated. Call ${RECALL_TOOL} with ids [${id}] and offset ${end} for more.]`;
+        }
+        blocks.push(block);
+    }
+    return blocks.join('\n\n');
+}
+
+function snippet(text: string, at: number): string {
+    const start = Math.max(0, at - SNIPPET / 2);
+    const end = Math.min(text.length, start + SNIPPET);
+    return `${start > 0 ? '…' : ''}${text.slice(start, end).replace(/\s+/g, ' ')}${end < text.length ? '…' : ''}`;
+}
+
+/** Literal, case-insensitive search of entries no longer in context, newest first. No regex: no catastrophic patterns. */
+async function search(api: Reader, query: string, page: number, budget: number, context: Context): Promise<string> {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) {
+        throw new Error('query has no terms');
+    }
+    const head = await api.commit((tx: Tx) => tx.latestHeadMarker(api.conversationId), context);
+    if (head === undefined) {
+        return 'Nothing in this session has left context yet.';
+    }
+    const hits: string[] = [];
+    const skip = (page - 1) * PAGE_SIZE;
+    let matched = 0;
+    let scanned = 0;
+    let max = Number(head.head) - 1;
+    let more = false;
+    while (max > 0 && scanned < MAX_SCAN_ENTRIES) {
+        const items = await api.commit(async (tx: Tx) => (await tx.scanEntries({
+            conversationId: api.conversationId,
+            maxEntryId: max as EntryId,
+            order: 'descending',
+        }, SCAN_PAGE)).items, context);
+        if (items.length === 0) {
+            break;
+        }
+        for (const entry of items) {
+            scanned += 1;
+            const text = entry.head === undefined ? entryText(entry)?.slice(0, MAX_SEARCH_TEXT) : undefined;
+            const lower = text?.toLowerCase();
+            if (text === undefined || !terms.every((term) => lower!.includes(term))) {
+                continue;
+            }
+            matched += 1;
+            if (matched > skip + PAGE_SIZE) {
+                more = true;
+                break;
+            }
+            if (matched > skip) {
+                hits.push(`#${entry.id} ${snippet(text, lower!.indexOf(terms[0]!))}`);
+            }
+        }
+        if (more) {
+            break;
+        }
+        max = Number(items.at(-1)!.id) - 1;
+    }
+    const limited = scanned >= MAX_SCAN_ENTRIES ? ` Stopped after the newest ${MAX_SCAN_ENTRIES} entries.` : '';
+    if (hits.length === 0) {
+        return `No matches for "${query}" on page ${page}.${limited} Try fewer terms.`;
+    }
+    const footer = more ? `\n\nMore matches: call ${RECALL_TOOL} with page ${page + 1}.` : '';
+    const text = `Matches for "${query}", newest first (page ${page}). Expand one with ids [N].${limited}\n\n${hits.join('\n')}${footer}`;
+    return text.slice(0, budget);
+}
+
+export const recallTool = Object.assign(defineTool({
+    name: RECALL_TOOL,
+    description: 'Read original messages that compaction summarized. ids: expand refs such as (#N) in full. query: '
+        + 'search history no longer in context; case-insensitive literal text, every term must match.',
+    parameters: Type.Object({
+        ids: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), {
+            maxItems: MAX_IDS,
+            description: 'Entry ids from refs such as (#N), without the #.',
+        })),
+        query: Type.Optional(Type.String({ maxLength: 500, description: 'Words to find. Every word must match.' })),
+        offset: Type.Optional(Type.Integer({ minimum: 0, description: 'Character offset, to page a long entry.' })),
+        page: Type.Optional(Type.Integer({ minimum: 1, description: 'Results page of a query. Default 1.' })),
+    }),
+    replay: 'safe',
+    execute: async (args, api, context) => {
+        const ids = [...new Set(args.ids ?? [])];
+        if (ids.length === 0 && !args.query?.trim()) {
+            throw new Error('Give ids, a query, or both.');
+        }
+        const query = args.query?.trim() ?? '';
+        // Both together share one response budget.
+        const budget = ids.length > 0 && query ? MAX_RECALL_CHARS / 2 : MAX_RECALL_CHARS;
+        const parts: string[] = [];
+        if (ids.length > 0) {
+            parts.push(await expand(api, ids, args.offset ?? 0, budget, context));
+        }
+        if (query) {
+            parts.push(await search(api, query, args.page ?? 1, budget, context));
+        }
+        return { content: [{ type: 'text' as const, text: parts.join('\n\n') }] };
+    },
+}), { annotations: { readOnlyHint: true } });
 
 export default function blackhole(host: Host) {
     return defineExtension({
         name: 'blackhole-deterministic',
+        tools: [recallTool],
         hooks: [hook(CompactionTask, { beforeCompact: createBeforeCompact(host) })],
     });
 }

@@ -10,11 +10,13 @@ process.env.TMPDIR = join(here, '.test-tmp');
 // Helpers isolate auth, settings, data, home, and providers before importing Pocket.
 const H = await import('/Users/theskumar/code/pi-pocket/test/helpers.ts');
 const { CompactionEntry } = await import('@earendil-works/pi-durable');
-const { fauxAssistantMessage, fauxText } = await import('@earendil-works/pi-ai/providers/faux');
-const { createBeforeCompact, MAX_SOURCE_CHARS, MAX_SUMMARY_CHARS } = await import('./blackhole.ts');
+const { fauxAssistantMessage, fauxText, fauxToolCall } = await import('@earendil-works/pi-ai/providers/faux');
+const { createBeforeCompact, MAX_SOURCE_CHARS, MAX_SUMMARY_CHARS, MAX_RECALL_CHARS, RECALL_NOTE, recallTool, sourceIds } = await import('./blackhole.ts');
 const { compileSegment } = await import('./_blackhole-compiler.js');
 const PREFIX = 'The conversation history before this point was compacted into the following summary:\n\n<summary>\n';
 const SUFFIX = '\n</summary>';
+const SEP = '\n\n---\n\n';
+const NOTE = SEP + RECALL_NOTE;
 const long = (label: string) => `Build ${label}. ${'Detailed background for this task with supporting evidence. '.repeat(300)}`;
 const user = (text: string) => ({ role: 'user', content: text, timestamp: 0 });
 const input = (text = long('the widget')) => ({ reason: 'manual', entries: [], messages: [user(text)], firstKept: 99 });
@@ -25,17 +27,40 @@ const api = { conversationId: 1, snapshot: async () => ({ cwd: here }), models: 
 // Runtime stubs intentionally omit unused methods. Integration tests below use real types and APIs.
 const invoke = (hook, data) => hook(data, api, H.context);
 
-test('deterministic compiler parity, no generated recall ids or footer', async () => {
+test('deterministic compiler parity; unmapped messages get no refs; one recall note', async () => {
     const data = input();
     const hook = createBeforeCompact(host as never);
     const first = await invoke(hook, data);
     const second = await invoke(hook, data);
     assert.deepEqual(first, second);
     assert.ok(first.summary, JSON.stringify(notices));
-    assert.equal(first.summary, compileSegment({ messages: data.messages, cwd: here, sourceIndices: [undefined] }));
-    assert.match(first.summary, /\[user\]/);
-    assert.doesNotMatch(first.summary, /`recall`|#\d+/);
+    const segment = compileSegment({ messages: data.messages, cwd: here, sourceIndices: [undefined] });
+    assert.equal(first.summary, segment + NOTE);
+    assert.match(segment, /\[user\]/);
+    assert.doesNotMatch(segment, /#\d+/);
     assert.ok(first.summary.length < data.messages[0].content.length);
+});
+
+test('refs are the entry ids of the summarized messages, by identity; unsure ones get none', async () => {
+    const a = user(long('alpha'));
+    const b = { role: 'assistant', content: [{ type: 'text', text: long('beta') }], stopReason: 'stop', timestamp: 0 };
+    const replaced = user(long('replaced by an edit'));
+    const shared = user('shared');
+    const marker = user(PREFIX + 'old' + SUFFIX);
+    const entries = [
+        { id: 7, kind: CompactionEntry.kind, model: [marker], head: 9 },
+        { id: 41, kind: 'x', model: [a] },
+        { id: 42, kind: 'x', model: [b] },
+        { id: 43, kind: 'x', model: [shared] },
+        { id: 44, kind: 'x', model: [shared] },
+    ];
+    // A structurally equal copy is not the stored message: identity only.
+    assert.deepEqual(sourceIds(entries as never, [marker, a, b, replaced, shared, structuredClone(a)]), [undefined, 41, 42, undefined, undefined, undefined]);
+    const data = { reason: 'manual', entries: entries.slice(1, 3), messages: [a, b], firstKept: 99 };
+    const { summary } = await invoke(createBeforeCompact(host as never), data);
+    assert.match(summary, /\(#41\)/);
+    assert.match(summary, /\(#42\)/);
+    assert.ok(summary.endsWith(NOTE));
 });
 
 test('worker runs under eval launch without inheriting incompatible flags', async () => {
@@ -64,8 +89,11 @@ test('old native prose is unchanged; repeated compaction compiles fresh messages
     };
     const one = await append(previous, 'first-window');
     const two = await append(one, 'second-window');
-    assert.ok(one.startsWith(previous + '\n\n---\n\n'));
-    assert.ok(two.startsWith(one + '\n\n---\n\n'));
+    assert.ok(one.startsWith(previous + SEP));
+    // Only the adapter's own trailing note moves; everything before it stays byte-for-byte.
+    assert.ok(two.startsWith(one.slice(0, -NOTE.length) + SEP));
+    assert.ok(one.endsWith(NOTE) && two.endsWith(NOTE));
+    assert.equal(two.split(RECALL_NOTE).length - 1, 1);
     assert.equal(two.split(previous).length - 1, 1);
     assert.equal(calls.length, 2);
     assert.equal(calls[1].messages.length, 1);
@@ -114,6 +142,74 @@ test('malformed prior marker declines, and instructions are visibly not interpre
     assert.match(notices.at(-1), /instructions are not interpreted/);
 });
 
+// A fake reader: visibility is the storage's job, so the fake filters by conversation like Pocket does.
+function reader(entries, head, conversationId = 1) {
+    return {
+        conversationId,
+        commit: async (change) => change({
+            latestHeadMarker: async () => head,
+            scanEntries: async (query, limit) => ({
+                items: entries
+                    .filter((e) => e.conversationId === query.conversationId
+                        && (query.minEntryId === undefined || e.id >= query.minEntryId)
+                        && (query.maxEntryId === undefined || e.id <= query.maxEntryId))
+                    .sort((x, y) => y.id - x.id)
+                    .slice(0, limit),
+            }),
+        }),
+    };
+}
+const recall = async (api, args) => (await recallTool.execute(args, api, H.context)).content[0].text;
+
+test('recall expands entries in full, pages long ones, and never reads another session', async () => {
+    const big = 'B'.repeat(MAX_RECALL_CHARS + 500);
+    const entries = [
+        { id: 5, conversationId: 1, kind: 'x', model: [user('the exact error: ENOENT /tmp/x')] },
+        { id: 6, conversationId: 1, kind: 'x', model: [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'SECRET' }, { type: 'text', text: 'ok' }, { type: 'toolCall', id: 'c', name: 'read', arguments: { path: 'a.ts' } }], timestamp: 0 }] },
+        { id: 7, conversationId: 1, kind: 'x', model: [{ role: 'toolResult', toolCallId: 'c', toolName: 'read', content: [{ type: 'text', text: big }], isError: false, timestamp: 0 }] },
+        { id: 8, conversationId: 2, kind: 'x', model: [user('other session secret')] },
+        { id: 9, conversationId: 1, kind: 'display' },
+    ];
+    const api = reader(entries, undefined);
+    assert.match(await recall(api, { ids: [5] }), /ENOENT \/tmp\/x/);
+    const six = await recall(api, { ids: [6] });
+    assert.match(six, /\[tool call\] read\(\{"path":"a.ts"\}\)/);
+    assert.doesNotMatch(six, /SECRET/, 'thinking is never replayed');
+    const first = await recall(api, { ids: [7] });
+    assert.ok(first.length <= MAX_RECALL_CHARS + 300);
+    assert.match(first, new RegExp(`offset ${MAX_RECALL_CHARS} for more`));
+    const rest = await recall(api, { ids: [7], offset: MAX_RECALL_CHARS });
+    assert.match(rest, new RegExp(`chars ${MAX_RECALL_CHARS}-(\\d+) of \\1\\)`));
+    assert.doesNotMatch(rest, /for more/);
+    const other = await recall(api, { ids: [8, 9, 404] });
+    assert.doesNotMatch(other, /other session secret/);
+    assert.equal(other.split('not found').length - 1, 3);
+    await assert.rejects(recall(api, {}), /Give ids, a query, or both/);
+});
+
+test('recall search: only compacted entries, newest first, literal terms, paged', async () => {
+    const entries = [];
+    for (let id = 1; id <= 30; id++) {
+        entries.push({ id, conversationId: 1, kind: 'x', model: [user(`note ${id} about widgets.* and gears`)] });
+    }
+    entries.push({ id: 31, conversationId: 1, kind: CompactionEntry.kind, model: [user('widgets summary')], head: 25 });
+    entries.push({ id: 32, conversationId: 1, kind: 'x', model: [user('widgets still in context')] });
+    assert.match(await recall(reader(entries, undefined), { query: 'widgets' }), /Nothing in this session has left context/);
+    const api = reader(entries, entries[30]);
+    const one = await recall(api, { query: 'GEARS widgets.*' });
+    const ids = [...one.matchAll(/^#(\d+) /gm)].map((m) => Number(m[1]));
+    assert.deepEqual(ids, [24, 23, 22, 21, 20, 19, 18, 17, 16, 15]);
+    assert.match(one, /page 2/);
+    const three = await recall(api, { query: 'widgets', page: 3 });
+    assert.deepEqual([...three.matchAll(/^#(\d+) /gm)].map((m) => Number(m[1])), [4, 3, 2, 1]);
+    assert.doesNotMatch(three, /More matches/);
+    // Regex syntax is literal text: "w.dgets" matches nothing.
+    assert.match(await recall(api, { query: 'w.dgets' }), /No matches/);
+    const both = await recall(api, { ids: [3], query: 'gears' });
+    assert.match(both, /^#3 \(chars/);
+    assert.match(both, /Matches for "gears"/);
+});
+
 test('bundle has no memory runtime, external packages, subprocesses, or network code', () => {
     const provenance = JSON.parse(readFileSync(join(here, 'compiler-provenance.json'), 'utf8'));
     assert.ok(provenance.inputs.some((i) => i.path.endsWith('/core/summarize.ts')));
@@ -121,6 +217,63 @@ test('bundle has no memory runtime, external packages, subprocesses, or network 
     assert.ok(provenance.imports.every((i) => i.path === 'node:path'));
     const bundle = readFileSync(join(here, '_blackhole-compiler.js'), 'utf8');
     assert.doesNotMatch(bundle, /node:child_process|node:worker_threads|https?:\/\//);
+});
+
+test('real Pocket: summary refs are real entry ids; the model recalls them; forks inherit, other sessions cannot', async () => {
+    const data = join(H.root, 'blackhole-recall-data');
+    const dropins = join(data, 'extensions');
+    mkdirSync(dropins, { recursive: true });
+    for (const file of ['blackhole.ts', '_blackhole-compiler.js', '_blackhole-worker.js']) {
+        copyFileSync(join(here, file), join(dropins, file));
+    }
+    const route = (request) => {
+        const { role, text } = H.lastText(request);
+        if (role === 'toolResult') {
+            return fauxAssistantMessage([fauxText(`tool said: ${text}`)]);
+        }
+        const asked = text.match(/^RECALL (\S+)$/);
+        if (asked) {
+            const args = /^\d+$/.test(asked[1]) ? { ids: [Number(asked[1])] } : { query: asked[1] };
+            return fauxAssistantMessage([fauxToolCall('blackhole_recall', args)], { stopReason: 'toolUse' });
+        }
+        return fauxAssistantMessage([fauxText('Completed the requested task. '.repeat(40))]);
+    };
+    const app = await H.openApp(H.scriptedModel(route), data);
+    app.settings.getCompactionSettings = () => ({ enabled: true, reserveTokens: 16384, keepRecentTokens: 50 });
+    const view = async (id) => (await app.harness.conversation(id, H.context)).context(H.context);
+    const answer = async (id, text) => {
+        await H.say(app, id, text);
+        return (await H.modelTexts(app, id)).at(-1);
+    };
+    try {
+        await app.setExtensionEnabled(H.owner(app), 'blackhole.ts', true);
+        const id = await H.newSession(app);
+        await H.say(app, id, long('first-window') + ' Exact detail: QUOKKA-7731.');
+        await H.say(app, id, long('tail-kept'));
+        const before = await view(id);
+        const original = before.entries.find((entry) => JSON.stringify(entry.model ?? []).includes('QUOKKA-7731'));
+        await app.commands.compact(id, H.owner(app), undefined);
+        await H.until(async () => (await view(id)).head !== undefined, 'compaction marker');
+        const summary = JSON.stringify((await view(id)).head.model);
+        assert.match(summary, new RegExp(`\\(#${original.id}\\)`), 'ref is the real entry id');
+        assert.equal(summary.split('blackhole_recall').length - 1, 1, 'one recall note');
+        // Every ref the summary carries is an entry of this session.
+        const known = new Set(before.entries.map((entry) => Number(entry.id)));
+        for (const [, ref] of summary.matchAll(/\(#(\d+)\)/g)) {
+            assert.ok(known.has(Number(ref)), `ref #${ref} is an entry of the session`);
+        }
+        assert.match(await answer(id, `RECALL ${original.id}`), /tool said: #\d+ \(chars[\s\S]*QUOKKA-7731/);
+        assert.match(await answer(id, 'RECALL quokka-7731'), new RegExp(`#${original.id} .*QUOKKA-7731`));
+        const forkAt = (await view(id)).entries.at(-1).id;
+        const { id: fork } = await app.commands.fork(id, H.owner(app), { entryId: Number(forkAt) });
+        assert.match(await answer(fork, `RECALL ${original.id}`), /QUOKKA-7731/, 'a fork inherits the history');
+        const stranger = await H.newSession(app);
+        const denied = await answer(stranger, `RECALL ${original.id}`);
+        assert.match(denied, /not found in this session's history/);
+        assert.doesNotMatch(denied, /QUOKKA/);
+    } finally {
+        await app.close();
+    }
 });
 
 test('real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP', async () => {
