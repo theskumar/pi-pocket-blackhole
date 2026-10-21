@@ -11,7 +11,7 @@ Durable facts for maintaining this adapter. One fact per line.
 - Public repo: `theskumar/pi-pocket-blackhole`, MIT. Gallery module name `blackhole`; index repo `TannerMidd/pi-pocket-extensions`.
 - Pocket upstream: `TannerMidd/pi-pocket`. pi-blackhole upstream: `k0valik/pi-blackhole`, built on `sting8k/pi-vcc`.
 - Owner rules: no edits to the Pocket repo or live data, and no commits, deploys, or restarts without explicit approval.
-- Live install (2026-10-21): 0.3.0 (`213f2a8`), enabled. Old 0.1 files backed up in `~/.pi-pocket-blackhole-backup-0.1/`.
+- Live install (2026-10-21): 0.4.0 (`091aaee`), enabled. Old 0.1 files backed up in `~/.pi-pocket-blackhole-backup-0.1/`.
 - Compare installed and local files with `shasum -a 256` before any claim about what is live.
 
 ## Build and test
@@ -85,3 +85,4 @@ Durable facts for maintaining this adapter. One fact per line.
 - Recall `range: [from, to]` walks newest first and keeps only the oldest page (RANGE_ENTRY_CHARS 3,000 per entry, RANGE_OVERHEAD 600 reserved); `More:` starts after the last shown id. Caps: 10,000 entries or 32 MiB of text (images counted), then it names the unchecked span; past the 50,000-entry walk cap it says "Not checked".
 - `pipCheck(host, id)` is the one PiP check: hook, recall, and status all fail closed on `missing`.
 - Commands get no model registry: the hook learns `contextWindow` via `api.models.getModel` (read only, never fails the compaction). The test stub allows `getModel` and throws on other `models` access.
+- Docs: README is the user overview (install, use, limits). Details live in docs/how-it-works.md, docs/recall.md, docs/security.md, docs/development.md. Put new explainers there, not in the README.
