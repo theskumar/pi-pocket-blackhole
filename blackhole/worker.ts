@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads';
-import { compileSegment } from './_blackhole-compiler.js';
+import { compileSegment } from './compiler.ts';
 
 try {
     parentPort.postMessage({ summary: compileSegment(workerData) });

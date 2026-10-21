@@ -1,21 +1,22 @@
-✔ deterministic compiler parity; unmapped messages get no refs; one recall note (39.374ms)
-✔ refs are the entry ids of the summarized messages, by identity; unsure ones get none (16.542334ms)
-✔ worker runs under eval launch without inheriting incompatible flags (202.974ms)
-✔ old native prose is unchanged; repeated compaction compiles fresh messages only (2.797084ms)
-✔ PiP skips without reading input or calling compiler; missing API declines (0.131417ms)
-✔ errors, empty, oversized and non-shrinking summaries decline visibly, never use models (13.400333ms)
-✔ multi-megabyte tool results decline before worker, source is not truncated (0.189083ms)
-✔ malformed prior marker declines, and instructions are visibly not interpreted (15.204125ms)
-✔ recall expands entries in full, pages long ones, and never reads another session (0.851584ms)
-✔ recall search: only compacted entries, newest first, literal terms, paged (0.601584ms)
-✔ bundle has no memory runtime, external packages, subprocesses, or network code (0.497958ms)
-✔ real Pocket: summary refs are real entry ids; the model recalls them; forks inherit, other sessions cannot (5674.305583ms)
-✔ real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP (2843.902666ms)
-ℹ tests 13
+✔ deterministic compiler parity; unmapped messages get no refs; one recall note (70.896834ms)
+✔ refs are the entry ids of the summarized messages, by identity; unsure ones get none (33.791666ms)
+✔ worker runs under eval launch without inheriting incompatible flags (273.0995ms)
+✔ old native prose is unchanged; repeated compaction compiles fresh messages only (2.690583ms)
+✔ PiP skips without reading input or calling compiler; missing API declines (0.146125ms)
+✔ errors, empty, oversized and non-shrinking summaries decline visibly, never use models (30.616667ms)
+✔ multi-megabyte tool results decline before worker, source is not truncated (0.346ms)
+✔ malformed prior marker declines, and instructions are visibly not interpreted (33.019416ms)
+✔ recall expands entries in full, pages long ones, and never reads another session (0.878375ms)
+✔ recall search: only compacted entries, newest first, literal terms, paged (0.651667ms)
+✔ bundle has no memory runtime, external packages, subprocesses, or network code (0.621959ms)
+✔ gallery rules: module imports only its own folder, Node, and Pocket packages (0.802834ms)
+✔ real Pocket: summary refs are real entry ids; the model recalls them; forks inherit, other sessions cannot (5153.501833ms)
+✔ real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP (2778.572917ms)
+ℹ tests 14
 ℹ suites 0
-ℹ pass 13
+ℹ pass 14
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 9360.601
+ℹ duration_ms 8938.025042

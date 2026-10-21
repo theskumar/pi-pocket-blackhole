@@ -1,6 +1,6 @@
 # Third-party licenses
 
-`_blackhole-compiler.js` contains code from the packages below. Source hashes are in `compiler-provenance.json`. No Blackhole memory runtime is included.
+`compiler.ts` contains code from the packages below. Source hashes are in `compiler-provenance.json` at the repository root. No Blackhole memory runtime is included.
 
 ## pi-blackhole 0.5.11
 

@@ -1,0 +1,11 @@
+{
+  "name": "pi-pocket-blackhole-build",
+  "private": true,
+  "description": "Pinned inputs for build.mjs. Install with: npm ci --prefix build --ignore-scripts --legacy-peer-deps",
+  "dependencies": {
+    "@earendil-works/pi-tui": "0.99.2",
+    "esbuild": "0.28.2",
+    "get-east-asian-width": "1.6.0",
+    "pi-blackhole": "0.5.11"
+  }
+}

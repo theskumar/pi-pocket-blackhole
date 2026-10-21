@@ -2,107 +2,107 @@
   "upstream": "pi-blackhole@0.5.11",
   "inputs": [
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/segment.ts",
+      "path": "pi-blackhole/src/core/segment.ts",
       "bytesInOutput": 1213,
       "sha256": "6e57c22618aba3809ee50240fc471bc5086708991fa375591d6b31ed1aba4f12"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/tool-args.ts",
+      "path": "pi-blackhole/src/core/tool-args.ts",
       "bytesInOutput": 201,
       "sha256": "cc795f18898feff74fe61edd954972bd53a097725055bf896b1c8a4087d822d2"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/content.ts",
+      "path": "pi-blackhole/src/core/content.ts",
       "bytesInOutput": 1476,
       "sha256": "44bdcd52811d7816b33c3bcb30f49578ba3abd8121e43c6e6d75dfcdf5e87c66"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/sanitize.ts",
+      "path": "pi-blackhole/src/core/sanitize.ts",
       "bytesInOutput": 204,
       "sha256": "af0f823cda086742f56117eddfa00291cef18b7387e7f021a3e9331a91ddac8f"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/normalize.ts",
+      "path": "pi-blackhole/src/core/normalize.ts",
       "bytesInOutput": 2216,
       "sha256": "321732adef7ae294fdf0325f3717cd6182c596d14797ef111bf4b76d72841a39"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/filter-noise.ts",
+      "path": "pi-blackhole/src/core/filter-noise.ts",
       "bytesInOutput": 1112,
       "sha256": "330f3ea5b8e5c4abf48c814e2ca5d58d7fb783ca9de892d679593143161379f2"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/skill-collapse.ts",
+      "path": "pi-blackhole/src/core/skill-collapse.ts",
       "bytesInOutput": 848,
       "sha256": "7f34295ea2af9698280dd613871d9db08b81469c9276e58d9588ed7b2f6139b9"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/extract/goals.ts",
+      "path": "pi-blackhole/src/extract/goals.ts",
       "bytesInOutput": 2637,
       "sha256": "9371f2c07eeede794402b9a2a2f105e157b4ac9d025bba77e9eeddf4a8b12873"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/extract/files.ts",
+      "path": "pi-blackhole/src/extract/files.ts",
       "bytesInOutput": 4972,
       "sha256": "010a04bf8f5ca58bf20b6aa9d432cf6c7f4b8a5b9a63de4c66b6445b3ab588a7"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/extract/file-touch.ts",
+      "path": "pi-blackhole/src/extract/file-touch.ts",
       "bytesInOutput": 31819,
       "sha256": "8908f1dbd8e1cc29a106048fca52dd5acb79902d8417b6e3791cb9ec0d8f1eb8"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/extract/preferences.ts",
+      "path": "pi-blackhole/src/extract/preferences.ts",
       "bytesInOutput": 2744,
       "sha256": "68d8cb92a72b5ce96ca1d54bf7790a8b602d189f5461d707051d25105eff279f"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/extract/commits.ts",
+      "path": "pi-blackhole/src/extract/commits.ts",
       "bytesInOutput": 8074,
       "sha256": "5e33ffc4685b1cafaf7d57ca539bc8792844529fe618a0430f7f92e2702f1e3b"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/brief.ts",
+      "path": "pi-blackhole/src/core/brief.ts",
       "bytesInOutput": 8418,
       "sha256": "8013a9e439b5af500ada3ad7cedc04c88af09ab13b6213d3cecf86e6641ccee2"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/build-sections.ts",
+      "path": "pi-blackhole/src/core/build-sections.ts",
       "bytesInOutput": 4903,
       "sha256": "72c122c55995c65c0acc0fc3a506a69343fa1f8300ba724a79bf469a974f9252"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/get-east-asian-width/lookup-data.js",
+      "path": "get-east-asian-width/lookup-data.js",
       "bytesInOutput": 4197,
       "sha256": "f6b40f86c9a2a6808ec808fa8ddcb8da261254cc6121d37ffaeb2bf35dad1d5b"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/get-east-asian-width/utilities.js",
+      "path": "get-east-asian-width/utilities.js",
       "bytesInOutput": 378,
       "sha256": "4b08a7e9e3ffacbcf198a6abceb2338d52ac671899e52ccc2851c898bfccac42"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/get-east-asian-width/lookup.js",
+      "path": "get-east-asian-width/lookup.js",
       "bytesInOutput": 1278,
       "sha256": "c80ecc22b120b27ef5ea9facb7000b8fd4ec037a84d9231d215f1c44bc9c21d0"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/get-east-asian-width/index.js",
+      "path": "get-east-asian-width/index.js",
       "bytesInOutput": 383,
       "sha256": "d7b1ba05914c0fc311c20e5618bf8d0893c9c74078a07975e2df981445e64887"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/@earendil-works/pi-tui/dist/utils.js",
+      "path": "@earendil-works/pi-tui/dist/utils.js",
       "bytesInOutput": 17749,
       "sha256": "9a0a1434cdca6cce93dbfe63dd2900b239431f6bd15063823d27e3e82b500ea2"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/format.ts",
+      "path": "pi-blackhole/src/core/format.ts",
       "bytesInOutput": 2025,
       "sha256": "788b8f003c990dbb724da21a5bfb18eed1c8b15c69ccc4d7432917ffc5ecf2c7"
     },
     {
-      "path": "../../.pi/agent/npm/node_modules/pi-blackhole/src/core/summarize.ts",
+      "path": "pi-blackhole/src/core/summarize.ts",
       "bytesInOutput": 438,
       "sha256": "680430171f54f02c6bb51ec30e754b7bf8001168c46c90eee45198200018bc4c"
     }

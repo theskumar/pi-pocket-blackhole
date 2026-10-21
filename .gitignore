@@ -1,3 +1,4 @@
 node_modules
 .test-tmp/
 _compiler-metafile.json
+build/node_modules/

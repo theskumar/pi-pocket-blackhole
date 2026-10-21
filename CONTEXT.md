@@ -7,18 +7,25 @@ Durable facts for maintaining this adapter. One fact per line.
 - Purpose: a Pi Pocket drop-in that replaces ordinary sessions' compaction summaries with deterministic pi-blackhole output, plus a `blackhole_recall` tool.
 - Upstream: `pi-blackhole@0.5.11`, MIT, installed at `/Users/theskumar/.pi/agent/npm/node_modules/pi-blackhole`.
 - Pocket code: `/Users/theskumar/code/pi-pocket`. Pocket data and live drop-ins: `~/.pi-pocket/extensions/`.
-- Deployment files: `blackhole.ts`, `_blackhole-worker.js`, `_blackhole-compiler.js`, `THIRD_PARTY_LICENSES.md`.
+- Deployment files: `blackhole.ts`, `blackhole/compiler.ts`, `blackhole/worker.ts`, `blackhole/THIRD_PARTY_LICENSES.md`.
+- Public repo: `theskumar/pi-pocket-blackhole`, MIT. Gallery module name `blackhole`; index repo `TannerMidd/pi-pocket-extensions`.
+- Pocket upstream: `TannerMidd/pi-pocket`. pi-blackhole upstream: `k0valik/pi-blackhole`, built on `sting8k/pi-vcc`.
 - Owner rules: no edits to the Pocket repo or live data, and no commits, deploys, or restarts without explicit approval.
-- The owner enabled `blackhole.ts` in Pocket. Installed `blackhole.ts` predates recall (as of 2026-10-21); helpers match.
+- Live install (2026-10-21): enabled, pre-recall `blackhole.ts` plus old `_blackhole-*.js` helpers. Deploying 0.2.0 needs the `blackhole/` folder and deletion of the old helpers.
+- Compare installed and local files with `shasum -a 256` before any claim about what is live.
 
 ## Build and test
 
-- Test: `node --test blackhole.test.ts` (13 tests, about 10 s, real Pocket helpers, faux provider, no network).
-- Build the compiler bundle: `node build.mjs`. It uses Pocket's esbuild and rewrites `compiler-provenance.json`.
-- `node_modules` is a symlink to Pocket's dependencies. Do not install packages.
-- The test sets `TMPDIR` to `.test-tmp/` and imports `/Users/theskumar/code/pi-pocket/test/helpers.ts` before Pocket.
+- Test: `npm test` (14 tests, about 10 s, real Pocket helpers, faux provider, no network).
+- Build: `npm run setup:build` once (pinned inputs into `build/node_modules/`), then `npm run build`. It rewrites `compiler-provenance.json`.
+- `~/.pi/agent/npm/node_modules/pi-blackhole` is 0.5.13 now; never build from it. `build.mjs` refuses versions other than 0.5.11.
+- Rebuilt bundle code is identical to the reviewed 0.5.11 bundle; only path comments and the banner changed.
+- `node_modules` is a symlink to Pocket's dependencies, for tests only. Tests find Pocket via that link or `PI_POCKET_SOURCE`.
+- Never use `PI_POCKET_DIR` for the checkout: Pocket reads it as the data folder, and this shell sets it to `~/.pi-pocket`.
+- The test sets `TMPDIR` to `.test-tmp/` and imports Pocket's `test/helpers.ts` before Pocket.
 - `H.cleanUp()` deletes the shared test root, so put new real-Pocket tests before the last integration test.
-- `tsc`, ESLint, and Prettier are not installed here. `node --check` is the only syntax check.
+- `tsc`, ESLint, and Prettier are not installed here. `npm run check` (`node --check`) is the only syntax check.
+- Gallery entry: `npm run gallery-entry` prints JSON for a pushed commit; hashes come from git, not the working tree.
 - Write `test-output.txt` with `node --test blackhole.test.ts > test-output.txt 2>&1` after each change.
 
 ## Pi Durable facts
@@ -35,6 +42,15 @@ Durable facts for maintaining this adapter. One fact per line.
 - `defineTool` returns its argument, so tests can call `recallTool.execute(args, api, context)` directly.
 - `annotations: { readOnlyHint: true }` must be added with `Object.assign`. The `defineTool` type lacks it.
 - Native summary wrapper: prefix `The conversation history before this point was compacted into the following summary:\n\n<summary>\n`, suffix `\n</summary>`.
+
+## Gallery rules
+
+- Entry files must be `<name>.ts` plus files under `<name>/`. No `_`-prefixed top-level helpers.
+- Pocket's Share check treats every `.js`/`.mjs` file as browser code and rejects `node:` imports in it. Server helpers must be `.ts`.
+- No absolute import paths, not even `import type` from a Pocket checkout. Inline the needed host type.
+- Generated code needs its source and build steps (G11). Keep `build.mjs`, `build/package-lock.json`, and provenance.
+- `app.gallery.share('blackhole.ts')` in a test returns Pocket's own draft and problems. The test requires zero problems.
+- Shared file order is `blackhole.ts`, then the folder sorted by `localeCompare` (case-insensitive).
 
 ## Adapter design
 

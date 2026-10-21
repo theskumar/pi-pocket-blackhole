@@ -1,16 +1,23 @@
-/** Compile ordinary sessions into deterministic Blackhole summaries without model requests, with a recall tool for the originals. */
+/**
+ * Replaces ordinary sessions' compaction summaries with deterministic pi-blackhole extraction, with no model calls. Summary lines carry refs to the original messages, and the read-only tool blackhole_recall reads them back or searches compacted history, only within the calling session and its fork ancestry. No network access and no files outside the module. PiP keeps its own summarizer.
+ *
+ * Source, tests, and build steps: https://github.com/theskumar/pi-pocket-blackhole
+ */
 import { Worker } from 'node:worker_threads';
 import { AgentDoc, CompactionEntry, CompactionTask, defineExtension, defineTool, hook } from '@earendil-works/pi-durable';
 import type { CompactionHooks, EntryId, EntryRecord, ToolExecutionApi, Tx } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
 import type { Message } from '@earendil-works/pi-ai';
 import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate';
-import type { PocketHost } from '/Users/theskumar/code/pi-pocket/src/server/host.ts';
 
 type Input = Parameters<CompactionHooks['beforeCompact']>[0];
 type CompilerInput = { messages: Message[]; sourceIndices: (number | undefined)[]; cwd: string };
 type Compiler = (input: CompilerInput) => Promise<string>;
-type Host = Pick<PocketHost, 'pip' | 'notice'>;
+// The two members of Pi Pocket's host that this module uses (types/pocket.d.ts in Pi Pocket).
+type Host = {
+    readonly pip?: { ownerOf(conversationId: number): string | undefined };
+    notice(level: 'info' | 'warning' | 'error', message: string, conversationId?: number): void;
+};
 const PREFIX = 'The conversation history before this point was compacted into the following summary:\n\n<summary>\n';
 const SUFFIX = '\n</summary>';
 export const MAX_SOURCE_CHARS = 8 * 1024 * 1024;
@@ -51,7 +58,7 @@ function bounded(value: unknown): void {
 
 export function compileInWorker(input: CompilerInput): Promise<string> {
     return new Promise((resolve, reject) => {
-        const worker = new Worker(new URL('./_blackhole-worker.js', import.meta.url), {
+        const worker = new Worker(new URL('./blackhole/worker.ts', import.meta.url), {
             workerData: input,
             // This worker is plain bundled JS. Do not inherit eval flags, custom
             // loaders, or V8 flags that Node rejects when passed to workers.

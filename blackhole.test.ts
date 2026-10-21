@@ -1,18 +1,20 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, copyFileSync, readFileSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, copyFileSync, readFileSync, realpathSync, renameSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 mkdirSync(join(here, '.test-tmp'), { recursive: true });
 process.env.TMPDIR = join(here, '.test-tmp');
+// A Pi Pocket checkout: PI_POCKET_SOURCE, or the folder that ./node_modules links into.
+const pocket = process.env.PI_POCKET_SOURCE ?? dirname(realpathSync(join(here, 'node_modules')));
 // Helpers isolate auth, settings, data, home, and providers before importing Pocket.
-const H = await import('/Users/theskumar/code/pi-pocket/test/helpers.ts');
+const H = await import(join(pocket, 'test/helpers.ts'));
 const { CompactionEntry } = await import('@earendil-works/pi-durable');
 const { fauxAssistantMessage, fauxText, fauxToolCall } = await import('@earendil-works/pi-ai/providers/faux');
 const { createBeforeCompact, MAX_SOURCE_CHARS, MAX_SUMMARY_CHARS, MAX_RECALL_CHARS, RECALL_NOTE, recallTool, sourceIds } = await import('./blackhole.ts');
-const { compileSegment } = await import('./_blackhole-compiler.js');
+const { compileSegment } = await import('./blackhole/compiler.ts');
 const PREFIX = 'The conversation history before this point was compacted into the following summary:\n\n<summary>\n';
 const SUFFIX = '\n</summary>';
 const SEP = '\n\n---\n\n';
@@ -26,6 +28,14 @@ const api = { conversationId: 1, snapshot: async () => ({ cwd: here }), models: 
 
 // Runtime stubs intentionally omit unused methods. Integration tests below use real types and APIs.
 const invoke = (hook, data) => hook(data, api, H.context);
+// The gallery's layout: the module, and its helpers in a folder with its name.
+const FILES = ['blackhole.ts', 'blackhole/compiler.ts', 'blackhole/worker.ts', 'blackhole/THIRD_PARTY_LICENSES.md'];
+function install(dropins) {
+    mkdirSync(join(dropins, 'blackhole'), { recursive: true });
+    for (const file of FILES) {
+        copyFileSync(join(here, file), join(dropins, file));
+    }
+}
 
 test('deterministic compiler parity; unmapped messages get no refs; one recall note', async () => {
     const data = input();
@@ -215,17 +225,24 @@ test('bundle has no memory runtime, external packages, subprocesses, or network 
     assert.ok(provenance.inputs.some((i) => i.path.endsWith('/core/summarize.ts')));
     assert.ok(provenance.inputs.every((i) => !/\/om\/|\/hooks\/|\/index\.(ts|js)$/.test(i.path) || /get-east-asian-width\/index.js$/.test(i.path)));
     assert.ok(provenance.imports.every((i) => i.path === 'node:path'));
-    const bundle = readFileSync(join(here, '_blackhole-compiler.js'), 'utf8');
-    assert.doesNotMatch(bundle, /node:child_process|node:worker_threads|https?:\/\//);
+    const bundle = readFileSync(join(here, 'blackhole/compiler.ts'), 'utf8');
+    assert.doesNotMatch(bundle.replace(/^\/\*.*\*\/$/m, ''), /node:child_process|node:worker_threads|https?:\/\//);
+});
+
+test('gallery rules: module imports only its own folder, Node, and Pocket packages', () => {
+    for (const file of FILES.filter((name) => /\.(ts|js)$/.test(name))) {
+        const text = readFileSync(join(here, file), 'utf8');
+        for (const [, spec] of text.matchAll(/(?:^|\n)\s*(?:import|export)\b[^'";]*?from\s*['"]([^'"]+)['"]/g)) {
+            assert.match(spec, /^(\.\/|node:|@earendil-works\/)/, `${file} imports ${spec}`);
+        }
+        assert.doesNotMatch(text, /\/Users\/|\.pi\/agent/, `${file} names a place on this machine`);
+    }
 });
 
 test('real Pocket: summary refs are real entry ids; the model recalls them; forks inherit, other sessions cannot', async () => {
     const data = join(H.root, 'blackhole-recall-data');
     const dropins = join(data, 'extensions');
-    mkdirSync(dropins, { recursive: true });
-    for (const file of ['blackhole.ts', '_blackhole-compiler.js', '_blackhole-worker.js']) {
-        copyFileSync(join(here, file), join(dropins, file));
-    }
+    install(dropins);
     const route = (request) => {
         const { role, text } = H.lastText(request);
         if (role === 'toolResult') {
@@ -247,6 +264,16 @@ test('real Pocket: summary refs are real entry ids; the model recalls them; fork
     };
     try {
         await app.setExtensionEnabled(H.owner(app), 'blackhole.ts', true);
+        // Pi Pocket's own Share… check: the drop-in stands on its own, and the entry script agrees with it.
+        const draft = await app.gallery.share('blackhole.ts');
+        assert.deepEqual(draft.problems, []);
+        const script = await import('./scripts/gallery-entry.mjs');
+        const entry = script.buildEntry((name) => readFileSync(join(here, name)), '0'.repeat(40), '0.0.0');
+        assert.deepEqual(draft.entry.declares, script.DECLARES);
+        assert.equal(draft.entry.description, entry.description);
+        assert.deepEqual(draft.entry.files, entry.files);
+        const { parseEntry } = await import(join(pocket, 'src/server/gallery/entry.ts'));
+        assert.doesNotThrow(() => parseEntry(entry));
         const id = await H.newSession(app);
         await H.say(app, id, long('first-window') + ' Exact detail: QUOKKA-7731.');
         await H.say(app, id, long('tail-kept'));
@@ -279,10 +306,7 @@ test('real Pocket: summary refs are real entry ids; the model recalls them; fork
 test('real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP', async () => {
     const data = join(H.root, 'blackhole-data');
     const dropins = join(data, 'extensions');
-    mkdirSync(dropins, { recursive: true });
-    for (const file of ['blackhole.ts', '_blackhole-compiler.js', '_blackhole-worker.js']) {
-        copyFileSync(join(here, file), join(dropins, file));
-    }
+    install(dropins);
     let requests = 0;
     let summaries = 0;
     const route = (request) => {
@@ -370,7 +394,7 @@ test('real Pocket drop-in loader, native previous summary, retention, repeat, re
         app.attach(tab.client);
         count = requests;
         // Break only the isolated copy's worker, not the installed source.
-        const workerFile = join(dropins, '_blackhole-worker.js');
+        const workerFile = join(dropins, 'blackhole/worker.ts');
         renameSync(workerFile, workerFile + '.disabled');
         try {
             await app.commands.compact(small, H.owner(app), undefined);

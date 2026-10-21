@@ -1,9 +1,18 @@
 {
-  "name": "pi-pocket-blackhole-adapter",
+  "name": "pi-pocket-blackhole",
+  "version": "0.2.0",
+  "description": "Deterministic pi-blackhole compaction summaries and a recall tool for Pi Pocket.",
+  "license": "MIT",
+  "author": "Saurabh Kumar (https://github.com/theskumar)",
+  "repository": { "type": "git", "url": "git+https://github.com/theskumar/pi-pocket-blackhole.git" },
   "private": true,
   "type": "module",
+  "engines": { "node": ">=24" },
   "scripts": {
+    "setup:build": "npm ci --prefix build --ignore-scripts --legacy-peer-deps",
     "build": "node build.mjs",
-    "test": "node --test blackhole.test.ts"
+    "test": "node --test blackhole.test.ts",
+    "check": "node --check blackhole.ts && node --check blackhole/worker.ts && node --check blackhole/compiler.ts",
+    "gallery-entry": "node scripts/gallery-entry.mjs"
   }
 }
