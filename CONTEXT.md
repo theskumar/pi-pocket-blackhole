@@ -11,7 +11,7 @@ Durable facts for maintaining this adapter. One fact per line.
 - Public repo: `theskumar/pi-pocket-blackhole`, MIT. Gallery module name `blackhole`; index repo `TannerMidd/pi-pocket-extensions`.
 - Pocket upstream: `TannerMidd/pi-pocket`. pi-blackhole upstream: `k0valik/pi-blackhole`, built on `sting8k/pi-vcc`.
 - Owner rules: no edits to the Pocket repo or live data, and no commits, deploys, or restarts without explicit approval.
-- Live install (2026-10-21): 0.2.2 (`457164e`), enabled. Old 0.1 files backed up in `~/.pi-pocket-blackhole-backup-0.1/`.
+- Live install (2026-10-21): 0.3.0 (`213f2a8`), enabled. Old 0.1 files backed up in `~/.pi-pocket-blackhole-backup-0.1/`.
 - Compare installed and local files with `shasum -a 256` before any claim about what is live.
 
 ## Build and test
