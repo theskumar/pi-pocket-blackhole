@@ -16,7 +16,7 @@ Durable facts for maintaining this adapter. One fact per line.
 
 ## Build and test
 
-- Test: `npm test` (18 tests, about 10 s, real Pocket helpers, faux provider, no network).
+- Test: `npm test` (22 tests, about 15 s, real Pocket helpers, faux provider, no network).
 - Build: `npm run setup:build` once (pinned inputs into `build/node_modules/`), then `npm run build`. It rewrites `compiler-provenance.json`.
 - `~/.pi/agent/npm/node_modules/pi-blackhole` is 0.5.13 now; never build from it. `build.mjs` refuses versions other than 0.5.11.
 - Rebuilt bundle code is identical to the reviewed 0.5.11 bundle; only path comments and the banner changed.
@@ -47,7 +47,7 @@ Durable facts for maintaining this adapter. One fact per line.
 
 - Entry files must be `<name>.ts` plus files under `<name>/`. No `_`-prefixed top-level helpers.
 - Pocket's Share check treats every `.js`/`.mjs` file as browser code and rejects `node:` imports in it. Server helpers must be `.ts`.
-- No absolute import paths, not even `import type` from a Pocket checkout. Inline the needed host type.
+- No absolute import paths, not even `import type` from a Pocket checkout. Inline the needed host type. (Pocket's publishing guide allows `import type` from `./_pocket.d.ts`; check the Share check accepts it before relying on that.)
 - Generated code needs its source and build steps (G11). Keep `build.mjs`, `build/package-lock.json`, and provenance.
 - `app.gallery.share('blackhole.ts')` in a test returns Pocket's own draft and problems. The test requires zero problems.
 - Shared file order is `blackhole.ts`, then the folder sorted by `localeCompare` (case-insensitive).
@@ -67,3 +67,13 @@ Durable facts for maintaining this adapter. One fact per line.
 - Recall drops `aborted`, `error`, and `deferred` assistant messages and hides thinking, like Pi Durable's context.
 - PiP sessions are skipped through `host.pip.ownerOf`. A missing API declines visibly.
 - Failures return `{ decline: true }` with a session notice. There is never a model fallback.
+- `minPocket` is 0.16.0 because gallery CI tests with Pocket v0.16.0 (pi-pocket-extensions `validate.yml`). The suite passes there; rerun it from a `git archive v0.16.0` copy before raising it.
+- `pocketApi = 1` is exported (documentation only: Pocket refuses a module only when it needs a newer API, and a missing export counts as 1). Tool parameters set `additionalProperties: false`, so renamed arguments fail validation instead of being ignored.
+- Cancel: the hook passes `context.abortSignal` to the worker, and `walk` checks it before each read. A cancel declines without a notice.
+- Threshold decline notices repeat only on a new reason, after `WARN_AGAIN_MS` (30 min), or after a success. The memory holds at most 1,000 sessions. Manual and overflow declines always warn.
+- The gallery PR is on hold by the owner's choice (2026-10-21).
+- Recall refuses PiP (`createRecallTool(host)` checks `host.pip.ownerOf`), because PiP's summarizer drops outside text on purpose. A missing check refuses too.
+- `unwrapTags` turns `<summary`/`</summary` in a new segment into `<_summary`/`</_summary`. Previous summaries are not touched.
+- At most `MAX_WORKERS` (2) compiler workers run at once; the 5-second deadline starts with the slot. `compileInWorker` takes a `spawn` for tests.
+- Queries have at most `MAX_TERMS` (16) words. Inline image data counts toward `MAX_SCAN_CHARS`.
+- The gallery description must stay at or under 600 characters; a test checks it.

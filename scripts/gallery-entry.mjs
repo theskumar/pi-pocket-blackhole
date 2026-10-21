@@ -46,7 +46,7 @@ export function buildEntry(read, commit, version) {
         source: { repo: 'theskumar/pi-pocket-blackhole', commit, path: '' },
         files,
         pocketApi: 1,
-        minPocket: '0.18.0',
+        minPocket: '0.16.0',
         declares: DECLARES,
     };
 }

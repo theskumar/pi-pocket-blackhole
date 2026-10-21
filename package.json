@@ -1,6 +1,6 @@
 {
   "name": "pi-pocket-blackhole",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Deterministic pi-blackhole compaction summaries and a recall tool for Pi Pocket.",
   "license": "MIT",
   "author": "Saurabh Kumar (https://github.com/theskumar)",

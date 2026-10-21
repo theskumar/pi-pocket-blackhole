@@ -1,26 +1,30 @@
-✔ deterministic compiler parity; unmapped messages get no refs; one recall note (71.133417ms)
-✔ refs are the entry ids of the summarized messages, by identity; unsure ones get none (34.425917ms)
-✔ GitHub refs in text stay literal; only the compiler refs of passed ids become #e (32.640791ms)
-✔ worker runs under eval launch without inheriting incompatible flags (223.997083ms)
-✔ old native prose is unchanged; repeated compaction compiles fresh messages only (4.485584ms)
-✔ PiP skips without reading input or calling compiler; missing API declines (0.155708ms)
-✔ errors, empty, oversized and non-shrinking summaries decline visibly, never use models (27.913917ms)
-✔ multi-megabyte tool results decline before worker, source is not truncated (0.220959ms)
-✔ malformed prior marker declines, and instructions are visibly not interpreted (30.245292ms)
-✔ recall expands entries as the model saw them, pages long ones, and never reads another session (1.920292ms)
-✔ recall stops at the newest reset, for ids and for search (0.469583ms)
-✔ recalled text cannot forge markers, roles, or new messages (0.2835ms)
-✔ recall search: only compacted entries, newest first, literal terms, stable paging, bounded (0.660708ms)
-✔ recall budget holds for many truncated ids, and search scans a bounded number of entries (72.973959ms)
-✔ bundle has no memory runtime, external packages, subprocesses, or network code (0.641209ms)
-✔ gallery rules: module imports only its own folder, Node, and Pocket packages (0.742833ms)
-✔ real Pocket: summary refs are real entry ids; the model recalls them; forks inherit, other sessions cannot (6354.330875ms)
-✔ real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP (3155.807709ms)
-ℹ tests 18
+✔ deterministic compiler parity; unmapped messages get no refs; one recall note (75.333125ms)
+✔ refs are the entry ids of the summarized messages, by identity; unsure ones get none (34.6105ms)
+✔ GitHub refs in text stay literal; only the compiler refs of passed ids become #e (32.940417ms)
+✔ worker runs under eval launch without inheriting incompatible flags (241.017125ms)
+✔ old native prose is unchanged; repeated compaction compiles fresh messages only (4.679833ms)
+✔ PiP skips without reading input or calling compiler; missing API declines (0.199458ms)
+✔ errors, empty, oversized and non-shrinking summaries decline visibly, never use models (29.061416ms)
+✔ a repeated automatic decline warns once per reason and quiet period; manual and overflow always warn; a cancel declines silently (0.637167ms)
+✔ the worker stops when the turn is cancelled, and at most two run at once (41.293709ms)
+✔ multi-megabyte tool results decline before worker, source is not truncated (0.187333ms)
+✔ malformed prior marker declines, and instructions are visibly not interpreted (32.470042ms)
+✔ recall expands entries as the model saw them, pages long ones, and never reads another session (1.646083ms)
+✔ recall stops at the newest reset, for ids and for search (0.528791ms)
+✔ recalled text cannot forge markers, roles, or new messages (0.273292ms)
+✔ recall search: only compacted entries, newest first, literal terms, stable paging, bounded (1.001666ms)
+✔ recall budget holds for many truncated ids, and search scans a bounded number of entries (75.809708ms)
+✔ recall refuses PiP and a missing PiP check; queries are capped; summary tags are unwrapped (0.615417ms)
+✔ search counts inline image data toward its scan limit (0.206583ms)
+✔ bundle has no memory runtime, external packages, subprocesses, or network code (0.5215ms)
+✔ gallery rules: module imports only its own folder, Node, and Pocket packages (1.279333ms)
+✔ real Pocket: summary refs are real entry ids; the model recalls them; forks inherit, other sessions cannot (8113.479791ms)
+✔ real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP (2772.356542ms)
+ℹ tests 22
 ℹ suites 0
-ℹ pass 18
+ℹ pass 22
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 10544.29625
+ℹ duration_ms 12076.887208

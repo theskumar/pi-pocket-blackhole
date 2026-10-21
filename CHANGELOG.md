@@ -2,6 +2,27 @@
 
 What changed in each version, in plain terms. Newest first.
 
+## 0.2.2 (2026-10-21)
+
+Fixes for cancelling, warnings, and compatibility.
+
+### Changed
+
+- **Works with Pi Pocket 0.16.0 and later.** It asked for 0.18.0 before, but nothing it uses is newer than 0.16.0. The tests pass on both.
+- **Cancelling stops the compiler at once.** It used to run for up to 5 seconds after a cancel. A recall search stops before its next read. A cancel no longer shows a "declined" warning.
+- **One warning, not one per turn.** When automatic compaction keeps declining for the same reason, you see the warning once. It shows again after 30 minutes, or when the reason changes. A compaction you start, or one forced by a full context, always says why it declined.
+- **Recall stays out of PiP.** PiP's own summaries leave out text from webhooks, GitHub events, and other sessions on purpose. Recall used to be able to search that text back. It now refuses to run in PiP.
+- **Summaries can't be broken out of.** An error message or web page that contains `</summary>` used to end Pocket's summary wrapper early, so the rest of the text looked like it came from outside the summary. Those tags now lose their shape.
+- **Lighter on the server.** At most two compilers run at once. A search takes at most 16 words, and large inline images count toward its scan limit.
+- **Clearer warnings.** A declined compaction now says what to do: start a new context with `/reset`, fork, or turn the module off to use the model summarizer.
+- **Wrong tool arguments fail loudly.** A model that still sends the old `page` argument gets an error instead of page 1 again.
+- **Declares its extension API.** The module now says it is written for Pi Pocket extension API 1.
+- **The gallery description names the risks.** It now says that there is no model fallback, that it uses an internal Pocket API to skip PiP, and that the recall tool is offered in every session.
+
+### Docs
+
+- New `docs/ROADMAP.md` with the planned work and why.
+
 ## 0.2.1 (2026-10-21)
 
 Safety and accuracy fixes for `blackhole_recall`, from three independent reviews. No review found a way for one session to read another's messages.
