@@ -11,7 +11,7 @@ Durable facts for maintaining this adapter. One fact per line.
 - Public repo: `theskumar/pi-pocket-blackhole`, MIT. Gallery module name `blackhole`; index repo `TannerMidd/pi-pocket-extensions`.
 - Pocket upstream: `TannerMidd/pi-pocket`. pi-blackhole upstream: `k0valik/pi-blackhole`, built on `sting8k/pi-vcc`.
 - Owner rules: no edits to the Pocket repo or live data, and no commits, deploys, or restarts without explicit approval.
-- Live install (2026-10-21): enabled, pre-recall `blackhole.ts` plus old `_blackhole-*.js` helpers. Deploying 0.2.x needs the `blackhole/` folder first, then `blackhole.ts`, deletion of the old helpers, and a restart.
+- Live install (2026-10-21): 0.2.1 (`42f918b`), enabled. Old 0.1 files backed up in `~/.pi-pocket-blackhole-backup-0.1/`.
 - Compare installed and local files with `shasum -a 256` before any claim about what is live.
 
 ## Build and test
