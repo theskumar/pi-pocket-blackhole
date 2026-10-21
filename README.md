@@ -3,7 +3,8 @@
 A [Pi Pocket](https://github.com/TannerMidd/pi-pocket) drop-in that replaces ordinary sessions' compaction summaries with deterministic [pi-blackhole](https://github.com/k0valik/pi-blackhole) extraction. It makes no model calls. Summary lines carry refs to the original messages, and a read-only tool, `blackhole_recall`, reads those messages back.
 
 - **Deterministic.** The same history always gives the same summary. Compaction costs no tokens and cannot fail on a provider error.
-- **Append-only.** Each compaction adds a new segment. Earlier summaries, native or deterministic, stay byte-for-byte.
+- **Append-only.** Each compaction adds a new numbered segment. Earlier summaries, native or deterministic, stay byte-for-byte.
+- **Visible.** `/blackhole-status` shows a session's summary size, its share of the context window, its segments, and its last decline.
 - **Recallable.** Refs such as `(#e4182)` are Pocket entry ids. `blackhole_recall` expands them in full or searches compacted history.
 - **Contained.** No network access, no files outside the module, no reads from other sessions, and nothing from before a reset. PiP keeps its own summarizer, and recall refuses to run there.
 
@@ -54,11 +55,26 @@ Turn off `blackhole.ts` in **Menu → Extensions**, then delete the four files. 
 
 ## How compaction works
 
-The module installs one `CompactionTask.beforeCompact` hook and one tool, `blackhole_recall`. Pocket still selects the replaced prefix and the verbatim tail. Pocket still stores the summary, manages tasks, and handles resets, forks, and restarts.
+The module installs one `CompactionTask.beforeCompact` hook, one tool, `blackhole_recall`, and one command, `/blackhole-status`. Pocket still selects the replaced prefix and the verbatim tail. Pocket still stores the summary, manages tasks, and handles resets, forks, and restarts.
 
 The hook checks `host.pip.ownerOf` before it reads the source. For PiP, it returns no decision, so PiP keeps its special summarizer. `host.pip` is an internal Pocket API, not part of `types/pocket.d.ts`. When it is missing or renamed, the hook declines visibly instead of guessing.
 
 On the first compaction, the compiler receives the selected messages. On later compactions, the module identifies the previous `CompactionEntry`, unwraps its summary, and appends only a freshly compiled segment. It never recompiles older summaries.
+
+### Segment markers
+
+Since 0.3.0, each new segment starts with one marker line:
+
+```text
+[Blackhole segment 3 · #e120..#e480 · 42 messages · h1a2b3c4d]
+```
+
+- **Number:** the count of verified segments in the previous summary, plus 1. Summaries from before 0.3.0 have none, so the first marked segment is 1. A count, not the highest number, so one odd marker cannot push the numbers out of range.
+- **Range:** the lowest and highest entry id among the compiled messages, or `no refs` when none maps to an entry. Entry ids are global, so the range can hold other sessions' ids. It is a label, not a list.
+- **Count:** the conversation messages compiled into the segment. System prompt markers do not count.
+- **Hash:** the first 8 hex digits of the SHA-256 of the segment's text, up to the next marker line or the end.
+
+Markers need no storage. A marker counts only when its hash matches its text. So a marker that the model summarizer copied into its own prose, with other text after it, does not count. Quoted text in a new segment cannot forge a marker either: its `[Blackhole segment ` becomes `[Blackhole_segment `. Text from before 0.3.0 never went through that step, and the hash is not a secret. A planted marker there can change the numbering and the status card, but nothing that Pi reads.
 
 The module uses `compileSegment`, not upstream `compile`. The `compile` merge path can discard native prose and cap older sections.
 
@@ -66,7 +82,7 @@ Each summary ends with one recall note. On append, the module removes the note w
 
 ### Not reproduced from the pi-blackhole CLI
 
-The module does not implement Blackhole's segment ledger, coverage metadata, rebasing, or budget recovery. These CLI options have no effect, because Pocket's policy applies:
+The module does not implement Blackhole's segment ledger, rebasing, or budget recovery. Segment markers carry a short form of coverage. These CLI options have no effect, because Pocket's policy applies:
 
 - `compactAfterTokens`: Pocket keeps its native trigger threshold.
 - `midRunCompaction`: Pocket keeps its native mid-run behavior.
@@ -75,6 +91,23 @@ The module does not implement Blackhole's segment ledger, coverage metadata, reb
 Pocket exposes compaction policy as a harness-wide setting. A summary hook cannot safely change per-session timing. The module changes no Pocket settings or core files.
 
 Pocket's own lessons and memory tool are unaffected. This module simply has no Blackhole observational memory.
+
+## Status
+
+`/blackhole-status` posts a card in the session. Everyone who sees the session sees the card, viewers too, and it stays in the session, its search, and its export. Pi never gets it. Anyone who can steer the session can run it, guests invited to that session included. It shows:
+
+- the newest summary's estimated tokens and characters,
+- its share of the context window of the session's model,
+- its share of the 1 MiB summary limit, once past half,
+- the newest 10 segments, oldest first, each with its range, message count, and size, and the size of older text before the first one,
+- the messages Pi has seen since that compaction, and their estimated tokens, up to 5,000 messages,
+- the last decline, with its trigger (automatic, manual, or context full), until a success, a reset, or a newer compaction.
+
+It finds the session's newest compaction or reset with one indexed read, then reads only the entries after it. Context edits apply, as for recall. In PiP it says that PiP keeps its own summarizer.
+
+A decline in the card shows only the module's own reasons. Any other error can name the server's folders, so the card and the session's warning say "internal error". The details go to Pocket's log and to the server's members, never to people invited to one session only.
+
+A command gets no model registry, so the hook notes each model's context window when it runs, before anything that can fail. Until then the card says the window is not known yet. The windows, by model, are shared by all sessions. The windows and the last decline live in memory only. A reload or restart forgets them, which is safe.
 
 ## Recall
 
@@ -187,6 +220,7 @@ Tests run in an isolated data folder, auth folder, and settings, with a scripted
 - **Recall:** identity mapping and fail-closed refs, `#e` refs next to literal GitHub refs, one trailing note across appends and older wordings, full expansion, offset paging, the response budget with 20 truncated ids, hidden thinking, context edits and aborted turns, the reset boundary, keyed markers against forged roles, and literal search with stable `before` paging and scan bounds.
 - **Real Pocket:** drop-in loading, retained-tail equality, restart, fork, reset, and PiP's unchanged summarizer. A real session gets compacted, and every ref, merged ones included, must be one of its entry ids. The scripted model calls `blackhole_recall` by id and by query. A fork recalls inherited entries but not the parent's later ones. An unrelated session gets "not found". After a reset, nothing before it comes back.
 - **Practices:** plan mode runs recall, unknown arguments fail validation, cancel terminates a started worker and stops the walk, at most two workers run, and repeated automatic declines warn once.
+- **Markers and status:** numbered markers continue across compactions, verify by hash, and cannot be forged by quoted text in a new segment. `/blackhole-status` runs through Pocket's real command runner after a compaction and after a reset. Unit tests cover the window share, an unknown window, a 1M window, 0.2.x and model-written summaries, 12 segments, edits, the last decline and its reset, internal errors kept out of the card, another session, and PiP.
 - **Hardening:** recall refuses PiP and a missing PiP check, queries have at most 16 words, image data counts toward the scan limit, and forged `</summary>` tags lose their shape.
 - **Gallery:** Pi Pocket's own **Share…** check finds no problems, its index parser accepts the entry, and the module imports only its own files, Node, and Pocket packages.
 
@@ -215,7 +249,7 @@ The script takes sizes and hashes from the commit, not the working tree. The tes
 
 | Path | Purpose |
 | --- | --- |
-| `blackhole.ts` | The module: compaction hook and `blackhole_recall`. |
+| `blackhole.ts` | The module: compaction hook, `blackhole_recall`, and `/blackhole-status`. |
 | `blackhole/` | Helpers that ship with the module: worker, compiler bundle, third-party licenses. |
 | `blackhole.test.ts` | Unit and real-Pocket integration tests. |
 | `build.mjs`, `build/` | Reproducible compiler build with pinned inputs. |

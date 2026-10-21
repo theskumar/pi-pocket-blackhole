@@ -21,6 +21,7 @@ export const DECLARES = {
     routes: [],
     client: null,
     access: 'owner',
+    commands: ['conversation blackhole-status'],
 };
 
 /** The first paragraph of the module's doc comment, as Pi Pocket's Share… reads it. */

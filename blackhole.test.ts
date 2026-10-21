@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { mkdirSync, copyFileSync, readFileSync, realpathSync, renameSync } from 'node:fs';
@@ -15,7 +16,7 @@ const pocket = process.env.PI_POCKET_SOURCE ?? dirname(realpathSync(join(here, '
 const H = await import(join(pocket, 'test/helpers.ts'));
 const { CompactionEntry, ResetEntry } = await import('@earendil-works/pi-durable');
 const { fauxAssistantMessage, fauxText, fauxToolCall } = await import('@earendil-works/pi-ai/providers/faux');
-const { compileInWorker, createBeforeCompact, createRecallTool, entryRefs, pocketApi, shouldWarn, unwrapTags, MAX_TERMS, MAX_WARNED, MAX_WORKERS, WARN_AGAIN_MS, MAX_SOURCE_CHARS, MAX_SUMMARY_CHARS, MAX_RECALL_CHARS, MAX_SCAN_ENTRIES, RECALL_NOTE, sourceIds } = await import('./blackhole.ts');
+const { Decline, compileInWorker, createBeforeCompact, createRecallTool, newState, segmentMarker, status, summaryShape, unmark, STATUS_COMMAND, entryRefs, pocketApi, shouldWarn, unwrapTags, MAX_TERMS, MAX_REMEMBERED, MAX_WORKERS, WARN_AGAIN_MS, MAX_SOURCE_CHARS, MAX_SUMMARY_CHARS, MAX_RECALL_CHARS, MAX_SCAN_ENTRIES, RECALL_NOTE, sourceIds } = await import('./blackhole.ts');
 const { compileSegment } = await import('./blackhole/compiler.ts');
 const PREFIX = 'The conversation history before this point was compacted into the following summary:\n\n<summary>\n';
 const SUFFIX = '\n</summary>';
@@ -30,7 +31,15 @@ const refIds = (text: string) => [...text.matchAll(/#e(\d+)/g)].map((m) => Numbe
 after(() => H.cleanUp());
 const host = { pip: { ownerOf: () => undefined }, notice: (_level, text) => notices.push(text) };
 const recallTool = createRecallTool(host as never);
-const api = { conversationId: 1, snapshot: async () => ({ cwd: here }), models: new Proxy({}, { get() { throw Error('model access forbidden'); } }) };
+const api = { conversationId: 1, snapshot: async () => ({ cwd: here }), models: new Proxy({}, {
+    // Reading the registry is allowed (status learns context windows). Any other access, such as a model call, fails.
+    get(_target, name) {
+        if (name === 'getModel') {
+            return () => undefined;
+        }
+        throw Error('model access forbidden');
+    },
+}) };
 
 // Runtime stubs intentionally omit unused methods. Integration tests below use real types and APIs.
 const invoke = (hook, data) => hook(data, api, H.context);
@@ -51,7 +60,8 @@ test('deterministic compiler parity; unmapped messages get no refs; one recall n
     assert.deepEqual(first, second);
     assert.ok(first.summary, JSON.stringify(notices));
     const segment = compileSegment({ messages: data.messages, cwd: here, sourceIndices: [undefined] });
-    assert.equal(first.summary, segment + NOTE);
+    const hash = createHash('sha256').update(segment).digest('hex').slice(0, 8);
+    assert.equal(first.summary, `[Blackhole segment 1 · no refs · 1 message · h${hash}]\n${segment}${NOTE}`);
     assert.match(segment, /\[user\]/);
     assert.doesNotMatch(segment, /#\d+/);
     assert.ok(first.summary.length < data.messages[0].content.length);
@@ -151,8 +161,11 @@ test('errors, empty, oversized and non-shrinking summaries decline visibly, neve
     for (const compiler of [async () => '', async () => { throw Error('test failure'); }, async () => 'x'.repeat(MAX_SUMMARY_CHARS + 1), async () => 'x'.repeat(100_000)]) {
         const start = notices.length;
         assert.deepEqual(await invoke(createBeforeCompact(host as never, compiler), input()), { decline: true });
-        assert.equal(notices.length, start + 1);
-        assert.match(notices.at(-1), /Nothing changed, and no model was used\. To free space: start a new context with \/reset/);
+        const added = notices.slice(start);
+        // An error that is not one of the module's own reasons adds one server-wide notice with its details.
+        assert.equal(added.length, added.some((n) => n.includes('test failure')) ? 2 : 1, JSON.stringify(added));
+        assert.match(added[0], /Nothing changed, and no model was used\. To free space: start a new context with \/reset/);
+        assert.doesNotMatch(added[0], /test failure/);
     }
     // A real extraction of a tiny input can grow: decline instead of looping compaction.
     assert.deepEqual(await invoke(createBeforeCompact(host as never), input('Hi')), { decline: true });
@@ -161,7 +174,7 @@ test('errors, empty, oversized and non-shrinking summaries decline visibly, neve
 test('a repeated automatic decline warns once per reason and quiet period; manual and overflow always warn; a cancel declines silently', async () => {
     const auto = () => ({ ...input(), reason: 'threshold' });
     let failure = 'first reason';
-    const hook = createBeforeCompact(host as never, async () => { throw Error(failure); });
+    const hook = createBeforeCompact(host as never, async () => { throw new Decline(failure); });
     const start = notices.length;
     for (let i = 0; i < 3; i++) {
         assert.deepEqual(await invoke(hook, auto()), { decline: true });
@@ -180,7 +193,7 @@ test('a repeated automatic decline warns once per reason and quiet period; manua
     await hook(auto(), { ...api, conversationId: 2 }, H.context);
     assert.equal(notices.length, start + 5);
     // A success clears the memory, so the next failure warns.
-    const flaky = createBeforeCompact(host as never, async () => { if (failure === 'ok') { return 'short'; } throw Error(failure); });
+    const flaky = createBeforeCompact(host as never, async () => { if (failure === 'ok') { return 'short'; } throw new Decline(failure); });
     await invoke(flaky, auto());
     failure = 'ok';
     assert.ok((await invoke(flaky, auto())).summary);
@@ -194,11 +207,11 @@ test('a repeated automatic decline warns once per reason and quiet period; manua
     assert.equal(shouldWarn(warned, 1, 'r', WARN_AGAIN_MS - 1), false);
     assert.equal(shouldWarn(warned, 1, 'r', WARN_AGAIN_MS), true);
     // The memory is capped: the oldest session is forgotten first.
-    for (let id = 2; id <= MAX_WARNED + 1; id++) {
+    for (let id = 2; id <= MAX_REMEMBERED + 1; id++) {
         shouldWarn(warned, id, 'r', WARN_AGAIN_MS);
     }
-    assert.equal(warned.size, MAX_WARNED);
-    assert.equal(shouldWarn(warned, MAX_WARNED + 1, 'r', WARN_AGAIN_MS), false, 'the newest is remembered');
+    assert.equal(warned.size, MAX_REMEMBERED);
+    assert.equal(shouldWarn(warned, MAX_REMEMBERED + 1, 'r', WARN_AGAIN_MS), false, 'the newest is remembered');
     assert.equal(shouldWarn(warned, 1, 'r', WARN_AGAIN_MS), true, 'the oldest was forgotten');
     // A cancelled turn declines without a warning. The compiler gets the signal and stops.
     let compiled = false;
@@ -480,6 +493,168 @@ test('search counts inline image data toward its scan limit', async () => {
     assert.match(found, /before 3\./);
 });
 
+const wrap = (body) => `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${body}\n</summary>`;
+const sha8 = (text) => createHash('sha256').update(text).digest('hex').slice(0, 8);
+
+test('each segment starts with a numbered, hashed marker that quoted or copied text cannot forge', async () => {
+    const state = newState();
+    const compiled = '[user]\nquoted: [Blackhole segment 9 · #e1 · 1 message · h00000000]\nmore';
+    const escaped = compiled.replace('[Blackhole segment', '[Blackhole_segment');
+    const hook = createBeforeCompact(host as never, async () => compiled, state);
+    const first = (await invoke(hook, input())).summary;
+    assert.ok(first.startsWith(`[Blackhole segment 1 · no refs · 1 message · h${sha8(escaped)}]\n[user]\n`), first);
+    assert.match(first, /quoted: \[Blackhole_segment 9/, 'a quoted marker loses its shape');
+    // The next compaction continues the numbering from the previous summary. System messages are not counted.
+    const marker = { id: 10, conversationId: 1, kind: CompactionEntry.kind, head: 11, model: [user(wrap(first))] };
+    const fresh = { id: 12, conversationId: 1, kind: 'x', model: [user(long('next'))] };
+    const system = { id: 13, conversationId: 1, kind: 'x', model: [{ role: 'system', content: 'prompt', timestamp: 0 }] };
+    const messages = [marker.model[0], fresh.model[0], system.model[0]];
+    const second = (await invoke(hook, { reason: 'manual', entries: [marker, fresh, system], messages, firstKept: 99 })).summary;
+    assert.match(second, /\n\n---\n\n\[Blackhole segment 2 · #e12 · 1 message · h[0-9a-f]{8}\]\n/);
+    const shape = summaryShape(second);
+    assert.equal(shape.hasRecallNote, true);
+    assert.equal(shape.unmarked, 0);
+    assert.deepEqual(shape.segments.map((s) => [s.n, s.label]), [[1, 'no refs · 1 message'], [2, '#e12 · 1 message']]);
+    assert.equal(shape.segments[0].chars, escaped.length);
+    assert.equal(second.slice(shape.segments[0].start, shape.segments[0].end), escaped, 'start and end bound the text');
+    // A marker whose hash does not match its text (a model summary that copied it, or an edit) is older text.
+    const copied = second.replace('more', 'more, folded in by a model');
+    const shapeCopied = summaryShape(copied);
+    assert.deepEqual(shapeCopied.segments.map((s) => s.n), [2]);
+    assert.ok(copied.slice(0, shapeCopied.unmarked).includes('folded in'), 'the copied segment counts as older text');
+    const native = `Model prose.\n\n---\n\n[Blackhole segment 4 · #e1 · 1 message · h${sha8('x')}]\nnot x`;
+    assert.deepEqual(summaryShape(native).segments, []);
+    assert.equal(summaryShape(native).unmarked, native.length);
+    // Numbering ignores unverified markers, and counts verified ones: a forged huge number cannot push the next
+    // marker past nine digits.
+    assert.match(segmentMarker(native, [], 0, 'y'), /^\[Blackhole segment 1 · no refs · 0 messages · h/);
+    const forged = `[Blackhole segment 999999999 · #e1 · 1 message · h${sha8('injected')}]\ninjected`;
+    assert.equal(summaryShape(forged).segments.length, 1);
+    assert.match(segmentMarker(forged, [], 0, 'y'), /^\[Blackhole segment 2 · /);
+    assert.equal(segmentMarker('', [5, undefined, 9, 7], 4, 'z'), `[Blackhole segment 1 · #e5..#e9 · 4 messages · h${sha8('z')}]`);
+    assert.equal(unmark('[Blackhole segment 1'), '[Blackhole_segment 1');
+});
+
+test('status: size, window, segments, messages since, and the last decline; PiP and resets', async () => {
+    const state = newState();
+    const ref = { provider: 'p', modelId: 'm' };
+    const models = { getModel: (provider, id) => (provider === 'p' && id === 'm' ? { contextWindow: 200_000 } : undefined), stream() { throw Error('no model calls'); } };
+    const withModel = { ...api, snapshot: async () => ({ cwd: here, model: ref }), models };
+    // The window is learned even when the compaction declines.
+    await createBeforeCompact(host as never, async () => '', state)(input(), withModel, H.context);
+    assert.equal(state.windows.get('p/m'), 200_000, 'the hook learns the window from the registry');
+    const hook = createBeforeCompact(host as never, async () => '[user]\nsegment text', state);
+    const { summary } = await hook(input(), withModel, H.context);
+    const entries = [
+        { id: 1, conversationId: 1, kind: 'x', model: [user('old')] },
+        { id: 2, conversationId: 1, kind: CompactionEntry.kind, head: 3, model: [user(wrap(summary))] },
+        { id: 3, conversationId: 1, kind: 'x', model: [user('after')] },
+        { id: 4, conversationId: 1, kind: 'x', model: [user('after again'), { role: 'system', content: 'not counted', timestamp: 0 }] },
+    ];
+    const ctxFor = (list, cid = 1) => {
+        const head = list.filter((e) => e.head !== undefined && e.conversationId === cid).sort((x, y) => y.id - x.id)[0];
+        const r = reader(list, head, cid);
+        return { conversationId: cid, signal: new AbortController().signal, context: H.context, snapshot: async () => ({ model: ref }), commit: (change) => r.commit(change) };
+    };
+    const shown = await status(host as never, state, ctxFor(entries));
+    assert.equal(shown, [
+        'Blackhole status',
+        `Summary: about ${shown.match(/about (\d+) tokens/)[1]} tokens (${summary.length} characters).`,
+        'Summary is 1% of the 200k window (m).',
+        'Segments: 1, oldest first:',
+        '- 1 · no refs · 1 message · 19 characters',
+        `Since then: 2 messages, about ${shown.match(/2 messages, about (\d+) tokens/)[1]} tokens.`,
+    ].join('\n'));
+    // A decline shows until a success clears it, with a plain trigger word. An error that is not one of the module's
+    // own reasons can name server paths: the session and the card say "internal error", and the details go server-wide.
+    notices.length = 0;
+    const seen = [{ id: 4, conversationId: 1, kind: 'x', model: [user('x')] }];
+    const failing = createBeforeCompact(host as never, async () => { throw new Error('ENOENT /Users/someone/secret'); }, state);
+    await failing({ ...input(), reason: 'threshold', entries: seen }, withModel, H.context);
+    assert.ok(notices.some((n) => n.startsWith("Blackhole couldn't compact this session (internal error)")), JSON.stringify(notices));
+    assert.ok(notices.some((n) => n.includes('ENOENT /Users/someone/secret') && n.includes('session 1')), 'details go server-wide');
+    const declinedCard = await status(host as never, state, ctxFor(entries), Date.now() + 5 * 60_000);
+    assert.match(declinedCard, /^Last decline: internal error \(automatic, 5 min ago\)\.$/m);
+    assert.doesNotMatch(declinedCard, /secret/);
+    // A reset after the decline makes it old news.
+    const afterReset = [...entries, { id: 6, conversationId: 1, kind: ResetEntry.kind, head: 6, model: [user('Start over.')] }];
+    assert.doesNotMatch(await status(host as never, state, ctxFor(afterReset)), /Last decline/);
+    await hook(input(), withModel, H.context);
+    assert.doesNotMatch(await status(host as never, state, ctxFor(entries)), /Last decline/);
+    // An unknown window, a big window, a 0.2 summary, a model summary, a near-limit summary.
+    assert.match(await status(host as never, newState(), ctxFor(entries)), /^Window: not known yet \(learned at the next compaction\)\.$/m);
+    const million = newState();
+    million.windows.set('p/m', 1_048_576);
+    assert.match(await status(host as never, million, ctxFor(entries)), /of the 1\.0?M window|of the 1M window/);
+    const old = [{ ...entries[1], model: [user(wrap(`old 0.2 segment${NOTE}`))] }];
+    assert.match(await status(host as never, state, ctxFor(old)), /^No segment lines yet \(written before 0\.3\.0\)\. The next compaction starts segment 1\.$/m);
+    const native = [{ ...entries[1], model: [user(wrap(summary.replace(NOTE, '')))] }];
+    const nativeShown = await status(host as never, state, ctxFor(native));
+    assert.match(nativeShown, /The model summarizer wrote this summary/);
+    assert.doesNotMatch(nativeShown, /Segments:/);
+    assert.doesNotMatch(shown, /Size limit/, 'the limit shows only past half');
+    const big = [{ ...entries[1], model: [user(wrap(`${'x'.repeat(MAX_SUMMARY_CHARS * 0.6)}${NOTE}`))] }];
+    assert.match(await status(host as never, state, ctxFor(big)), /^Size limit: 60% of 1 MiB used\./m);
+    // A reset, another session, and PiP.
+    const reset = [...entries, { id: 5, conversationId: 1, kind: ResetEntry.kind, head: 5, model: [user('Start over.')] }];
+    assert.match(await status(host as never, state, ctxFor(reset)), /No compaction in this context yet\./);
+    assert.match(await status(host as never, state, ctxFor(entries, 2)), /No compaction in this context yet\./, 'another session sees none of these');
+    const pip = { ...host, pip: { ownerOf: () => 'owner' } };
+    assert.match(await status(pip as never, state, ctxFor(entries)), /This is a PiP session/);
+    assert.match(await status({ notice() {} } as never, state, ctxFor(entries)), /PiP check is missing/);
+    // A broken registry never fails the compaction.
+    const broken = { ...withModel, models: { getModel() { throw Error('registry down'); } } };
+    assert.ok((await hook(input(), broken, H.context)).summary);
+});
+
+test('status edge cases: many segments, numbering by count, the note strip, edits, old declines', async () => {
+    const SEP2 = '\n\n---\n\n';
+    // Build a body of 12 segments the way the hook does, numbering by count.
+    let body = '';
+    for (let i = 1; i <= 12; i++) {
+        const text = `[user]\nsegment ${i}`;
+        body = `${body ? body + SEP2 : ''}${segmentMarker(body, [i * 10, i * 10 + 5], 2, text)}\n${text}`;
+    }
+    const twelve = body + NOTE;
+    assert.deepEqual(summaryShape(twelve).segments.map((s) => s.n), Array.from({ length: 12 }, (_, i) => i + 1));
+    // Out-of-order numbers (markers 3 then 2) still give count + 1.
+    const a = '[user]\na';
+    const b = '[user]\nb';
+    const outOfOrder = `[Blackhole segment 3 · no refs · 1 message · h${sha8(a)}]\n${a}${SEP2}[Blackhole segment 2 · no refs · 1 message · h${sha8(b)}]\n${b}`;
+    assert.match(segmentMarker(outOfOrder, [], 1, 'c'), /^\[Blackhole segment 3 · /);
+    // A segment whose text ends like a recall note keeps its number: the previous text is never stripped twice.
+    const noteLike = `[user]\nquoted${SEP2}Refs like (#e1) were in an old summary; \`blackhole_recall\` reads them.`;
+    const one = `${segmentMarker('', [], 1, noteLike)}\n${noteLike}`;
+    assert.equal(parseInt(segmentMarker(one, [], 1, 'x').match(/segment (\d+)/)[1], 10), 2);
+    const ref = { provider: 'p', modelId: 'm' };
+    const state = newState();
+    const ctxFor = (list) => {
+        const head = list.filter((e) => e.head !== undefined).sort((x, y) => y.id - x.id)[0];
+        const r = reader(list, head, 1);
+        return { conversationId: 1, signal: new AbortController().signal, context: H.context, snapshot: async () => ({ model: ref }), commit: (change) => r.commit(change) };
+    };
+    const marker = { id: 2, conversationId: 1, kind: CompactionEntry.kind, head: 3, model: [user(wrap(twelve))] };
+    const shown = await status(host as never, state, ctxFor([marker]));
+    assert.match(shown, /^Segments: 12\. Newest 10, oldest first:\n- 3 · #e30\.\.#e35 · 2 messages · \d+ characters\n/m);
+    assert.match(shown, /^- 12 · #e120\.\.#e125 · 2 messages · \d+ characters$/m);
+    assert.doesNotMatch(shown, /^- [12] · /m);
+    // Edits apply as Pi sees them: a replaced summary, an omitted entry, an aborted turn.
+    const replaced = wrap(`${segmentMarker('', [], 1, 'r')}\nr${NOTE}`);
+    const entries = [
+        marker,
+        { id: 3, conversationId: 1, kind: 'x', model: [user('kept')] },
+        { id: 4, conversationId: 1, kind: 'x', model: [user('omitted')] },
+        { id: 5, conversationId: 1, kind: 'x', model: [assistant('cut off', 'aborted')] },
+        { id: 6, conversationId: 1, kind: 'x', model: [user('edits')], edits: [{ target: 4, action: 'omit' }, { target: 2, action: 'replace', messages: [user(replaced)] }] },
+    ];
+    const edited = await status(host as never, state, ctxFor(entries));
+    assert.match(edited, /^Segments: 1, oldest first:$/m, 'the replacement summary is shown');
+    assert.match(edited, /^Since then: 2 messages, /m, 'omitted and aborted messages are not counted');
+    // A decline from hours ago.
+    state.declined.set(1, { reason: 'summary exceeds 1 MiB character limit', trigger: 'overflow', at: 0, upTo: 99 });
+    assert.match(await status(host as never, state, ctxFor(entries), 3 * 3600_000 + 1), /^Last decline: summary exceeds 1 MiB character limit \(context full, 3 h ago\)\.$/m);
+});
+
 test('bundle has no memory runtime, external packages, subprocesses, or network code', () => {
     const provenance = JSON.parse(readFileSync(join(here, 'compiler-provenance.json'), 'utf8'));
     assert.ok(provenance.inputs.some((i) => i.path.endsWith('/core/summarize.ts')));
@@ -546,6 +721,17 @@ test('real Pocket: summary refs are real entry ids; the model recalls them; fork
         const summary = JSON.stringify((await view(id)).head.model);
         assert.match(summary, new RegExp(`\\(#e${original.id}\\)`), 'ref is the real entry id');
         assert.equal(summary.split('blackhole_recall').length - 1, 1, 'one recall note');
+        assert.match(summary, new RegExp(`\\[Blackhole segment 1 · #e\\d+\\.\\.#e\\d+ · \\d+ messages · h[0-9a-f]{8}\\]`), 'the segment starts with its marker');
+        // The status command, run as Pocket runs it.
+        const runStatus = (session) => app.extensionCommands.run(session, H.owner(app), {
+            commandId: app.webs.commands().find((each) => each.name === STATUS_COMMAND).id, args: '', requestId: crypto.randomUUID(),
+        });
+        const shown = await runStatus(id);
+        assert.equal(shown.type, 'card');
+        assert.match(shown.output, /^Summary: about [\d.k]+ tokens \([\d,]+ characters\)\.$/m);
+        assert.match(shown.output, /^Segments: 1, oldest first:$/m);
+        assert.match(shown.output, /^- 1 · #e\d+\.\.#e\d+ · \d+ messages · [\d,]+ characters$/m);
+        assert.match(shown.output, /^Summary is \d+% of the [\d.]+k window \(faux-1\)\.$/m, JSON.stringify(shown.output));
         // Every ref the summary carries, merged ones too, is an entry of this session.
         const known = new Set(before.entries.map((entry) => entry.id));
         assert.ok(refIds(summary).length > 0);
@@ -581,6 +767,9 @@ test('real Pocket: summary refs are real entry ids; the model recalls them; fork
         const reset = await answer(id, `RECALL ${original.id}`);
         assert.match(reset, /before the session's last reset/);
         assert.doesNotMatch(reset, /QUOKKA/);
+        const card = await runStatus(id);
+        assert.equal(card.type, 'card');
+        assert.match(card.output, /No compaction in this context yet/, 'a reset ends the summary');
         const searched = await answer(id, 'RECALL quokka-7731');
         assert.match(searched, /No matches/);
         assert.doesNotMatch(searched, new RegExp(`#e${original.id}`));

@@ -1,30 +1,33 @@
-✔ deterministic compiler parity; unmapped messages get no refs; one recall note (75.333125ms)
-✔ refs are the entry ids of the summarized messages, by identity; unsure ones get none (34.6105ms)
-✔ GitHub refs in text stay literal; only the compiler refs of passed ids become #e (32.940417ms)
-✔ worker runs under eval launch without inheriting incompatible flags (241.017125ms)
-✔ old native prose is unchanged; repeated compaction compiles fresh messages only (4.679833ms)
-✔ PiP skips without reading input or calling compiler; missing API declines (0.199458ms)
-✔ errors, empty, oversized and non-shrinking summaries decline visibly, never use models (29.061416ms)
-✔ a repeated automatic decline warns once per reason and quiet period; manual and overflow always warn; a cancel declines silently (0.637167ms)
-✔ the worker stops when the turn is cancelled, and at most two run at once (41.293709ms)
-✔ multi-megabyte tool results decline before worker, source is not truncated (0.187333ms)
-✔ malformed prior marker declines, and instructions are visibly not interpreted (32.470042ms)
-✔ recall expands entries as the model saw them, pages long ones, and never reads another session (1.646083ms)
-✔ recall stops at the newest reset, for ids and for search (0.528791ms)
-✔ recalled text cannot forge markers, roles, or new messages (0.273292ms)
-✔ recall search: only compacted entries, newest first, literal terms, stable paging, bounded (1.001666ms)
-✔ recall budget holds for many truncated ids, and search scans a bounded number of entries (75.809708ms)
-✔ recall refuses PiP and a missing PiP check; queries are capped; summary tags are unwrapped (0.615417ms)
-✔ search counts inline image data toward its scan limit (0.206583ms)
-✔ bundle has no memory runtime, external packages, subprocesses, or network code (0.5215ms)
-✔ gallery rules: module imports only its own folder, Node, and Pocket packages (1.279333ms)
-✔ real Pocket: summary refs are real entry ids; the model recalls them; forks inherit, other sessions cannot (8113.479791ms)
-✔ real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP (2772.356542ms)
-ℹ tests 22
+✔ deterministic compiler parity; unmapped messages get no refs; one recall note (71.6235ms)
+✔ refs are the entry ids of the summarized messages, by identity; unsure ones get none (32.407584ms)
+✔ GitHub refs in text stay literal; only the compiler refs of passed ids become #e (33.267834ms)
+✔ worker runs under eval launch without inheriting incompatible flags (225.946416ms)
+✔ old native prose is unchanged; repeated compaction compiles fresh messages only (4.832584ms)
+✔ PiP skips without reading input or calling compiler; missing API declines (0.188375ms)
+✔ errors, empty, oversized and non-shrinking summaries decline visibly, never use models (29.698917ms)
+✔ a repeated automatic decline warns once per reason and quiet period; manual and overflow always warn; a cancel declines silently (0.745292ms)
+✔ the worker stops when the turn is cancelled, and at most two run at once (39.286ms)
+✔ multi-megabyte tool results decline before worker, source is not truncated (0.2035ms)
+✔ malformed prior marker declines, and instructions are visibly not interpreted (30.948792ms)
+✔ recall expands entries as the model saw them, pages long ones, and never reads another session (1.627916ms)
+✔ recall stops at the newest reset, for ids and for search (0.534833ms)
+✔ recalled text cannot forge markers, roles, or new messages (0.25975ms)
+✔ recall search: only compacted entries, newest first, literal terms, stable paging, bounded (0.591209ms)
+✔ recall budget holds for many truncated ids, and search scans a bounded number of entries (74.281416ms)
+✔ recall refuses PiP and a missing PiP check; queries are capped; summary tags are unwrapped (0.523417ms)
+✔ search counts inline image data toward its scan limit (0.187125ms)
+✔ each segment starts with a numbered, hashed marker that quoted or copied text cannot forge (0.626292ms)
+✔ status: size, window, segments, messages since, and the last decline; PiP and resets (4.897708ms)
+✔ status edge cases: many segments, numbering by count, the note strip, edits, old declines (0.908583ms)
+✔ bundle has no memory runtime, external packages, subprocesses, or network code (0.626792ms)
+✔ gallery rules: module imports only its own folder, Node, and Pocket packages (1.200209ms)
+✔ real Pocket: summary refs are real entry ids; the model recalls them; forks inherit, other sessions cannot (8756.589333ms)
+✔ real Pocket drop-in loader, native previous summary, retention, repeat, restart, fork, reset, PiP (2865.248583ms)
+ℹ tests 25
 ℹ suites 0
-ℹ pass 22
+ℹ pass 25
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 12076.887208
+ℹ duration_ms 12727.530084

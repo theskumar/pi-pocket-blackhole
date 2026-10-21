@@ -5,8 +5,8 @@ Durable facts for maintaining this adapter. One fact per line.
 ## Project
 
 - Purpose: a Pi Pocket drop-in that replaces ordinary sessions' compaction summaries with deterministic pi-blackhole output, plus a `blackhole_recall` tool.
-- Upstream: `pi-blackhole@0.5.11`, MIT, installed at `/Users/theskumar/.pi/agent/npm/node_modules/pi-blackhole`.
-- Pocket code: `/Users/theskumar/code/pi-pocket`. Pocket data and live drop-ins: `~/.pi-pocket/extensions/`.
+- Upstream: `pi-blackhole@0.5.11`, MIT, installed by Pi at `~/.pi/agent/npm/node_modules/pi-blackhole`.
+- Pocket code: a git checkout of `TannerMidd/pi-pocket` (tests find it through `PI_POCKET_SOURCE`). Pocket data and live drop-ins: `~/.pi-pocket/extensions/`.
 - Deployment files: `blackhole.ts`, `blackhole/compiler.ts`, `blackhole/worker.ts`, `blackhole/THIRD_PARTY_LICENSES.md`.
 - Public repo: `theskumar/pi-pocket-blackhole`, MIT. Gallery module name `blackhole`; index repo `TannerMidd/pi-pocket-extensions`.
 - Pocket upstream: `TannerMidd/pi-pocket`. pi-blackhole upstream: `k0valik/pi-blackhole`, built on `sting8k/pi-vcc`.
@@ -16,7 +16,7 @@ Durable facts for maintaining this adapter. One fact per line.
 
 ## Build and test
 
-- Test: `npm test` (22 tests, about 15 s, real Pocket helpers, faux provider, no network).
+- Test: `npm test` (25 tests, about 15 s, real Pocket helpers, faux provider, no network).
 - Build: `npm run setup:build` once (pinned inputs into `build/node_modules/`), then `npm run build`. It rewrites `compiler-provenance.json`.
 - `~/.pi/agent/npm/node_modules/pi-blackhole` is 0.5.13 now; never build from it. `build.mjs` refuses versions other than 0.5.11.
 - Rebuilt bundle code is identical to the reviewed 0.5.11 bundle; only path comments and the banner changed.
@@ -77,3 +77,8 @@ Durable facts for maintaining this adapter. One fact per line.
 - At most `MAX_WORKERS` (2) compiler workers run at once; the 5-second deadline starts with the slot. `compileInWorker` takes a `spawn` for tests.
 - Queries have at most `MAX_TERMS` (16) words. Inline image data counts toward `MAX_SCAN_CHARS`.
 - The gallery description must stay at or under 600 characters; a test checks it.
+- Segment markers: `[Blackhole segment N · <range> · M messages · h<sha8>]`, after SEPARATOR or at the body start (`SEGMENT_LINE`). Verified only when the hash matches the text up to the next marker line. N = verified count in `previous` + 1 (`parseSegments`, never strip `previous` twice). `unmark` escapes the opening in new segments.
+- `/blackhole-status` (scope `conversation`, a card for everyone in the session). Finds the head with `tx.latestHeadMarker`, then walks only newer entries (max 5,000 messages). One `State` per loaded version is shared by the hook and the command: `warned`, `declined` (with `upTo`, hidden after a newer head), `windows`. All in memory, all safe to lose, each capped at `MAX_REMEMBERED`.
+- Only `Decline` errors (the module's own fixed reasons) reach the session and the card. Others show as "internal error"; details go server-wide via `host.notice` without a conversation id, under the same rate limit.
+- `pipCheck(host, id)` is the one PiP check: hook, recall, and status all fail closed on `missing`.
+- Commands get no model registry: the hook learns `contextWindow` via `api.models.getModel` (read only, never fails the compaction). The test stub allows `getModel` and throws on other `models` access.

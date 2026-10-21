@@ -1,9 +1,9 @@
 /**
- * Replaces ordinary sessions' compaction summaries with deterministic pi-blackhole extraction, with no model calls. Summaries quote user text and tool output as extracted. Summary lines carry refs to the original messages, and the read-only tool blackhole_recall reads them back or searches compacted history: only in the calling session and its fork ancestry, never past its last reset, never in PiP. No network access and no outside files. PiP keeps its own summarizer, found through Pocket's internal host.pip API. On failure, compaction declines with a warning and no model fallback.
+ * Replaces ordinary sessions' compaction summaries with deterministic pi-blackhole extraction, with no model calls. Summaries quote user text and tool output as extracted, with refs to the original messages. The read-only tool blackhole_recall reads those back or searches compacted history: only the calling session and its fork ancestry, never past its last reset, never in PiP. /blackhole-status shows a summary's size. No network access or outside files. PiP keeps its own summarizer, found through Pocket's internal host.pip API. On failure, compaction declines with a warning, no model fallback.
  *
  * Source, tests, and build steps: https://github.com/theskumar/pi-pocket-blackhole
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type { WorkerOptions } from 'node:worker_threads';
 import { AgentDoc, CompactionEntry, CompactionTask, ResetEntry, defineExtension, defineTool, hook } from '@earendil-works/pi-durable';
@@ -23,6 +23,12 @@ type Host = {
 };
 /** Written for Pi Pocket extension API 1. A Pocket that only has an older API refuses the module and says why. */
 export const pocketApi = 1;
+
+/**
+ * A reason this module chose to decline, in its own fixed words. Only these reach the session and the status card.
+ * Any other error (storage, a snapshot, Node) can name server paths, so the session sees "internal error".
+ */
+export class Decline extends Error {}
 
 const PREFIX = 'The conversation history before this point was compacted into the following summary:\n\n<summary>\n';
 const SUFFIX = '\n</summary>';
@@ -49,7 +55,7 @@ function bounded(value: unknown): void {
         const item = pending.pop();
         nodes += 1;
         if (nodes > 100_000) {
-            throw new Error('source has too many values');
+            throw new Decline('source has too many values');
         }
         if (typeof item === 'string') {
             chars += item.length;
@@ -58,12 +64,12 @@ function bounded(value: unknown): void {
                 chars += key.length;
                 pending.push((item as Record<string, unknown>)[key]);
                 if (pending.length > 100_000) {
-                    throw new Error('source has too many values');
+                    throw new Decline('source has too many values');
                 }
             }
         }
         if (chars > MAX_SOURCE_CHARS) {
-            throw new Error('source exceeds 8 MiB character limit');
+            throw new Decline('source exceeds 8 MiB character limit');
         }
     }
 }
@@ -85,7 +91,7 @@ function takeSlot(signal?: AbortSignal): Promise<void> {
         };
         const leave = () => {
             queue.splice(queue.indexOf(go), 1);
-            reject(new Error('cancelled'));
+            reject(new Decline('cancelled'));
         };
         signal?.addEventListener('abort', leave, { once: true });
         queue.push(go);
@@ -107,7 +113,7 @@ const spawnWorker: Spawn = (url, options) => new Worker(url, options);
 
 export async function compileInWorker(input: CompilerInput, signal?: AbortSignal, spawn: Spawn = spawnWorker): Promise<string> {
     if (signal?.aborted) {
-        throw new Error('cancelled');
+        throw new Decline('cancelled');
     }
     await takeSlot(signal);
     try {
@@ -120,7 +126,7 @@ export async function compileInWorker(input: CompilerInput, signal?: AbortSignal
 function runWorker(input: CompilerInput, signal: AbortSignal | undefined, spawn: Spawn): Promise<string> {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) {
-            reject(new Error('cancelled'));
+            reject(new Decline('cancelled'));
             return;
         }
         const worker = spawn(new URL('./blackhole/worker.ts', import.meta.url), {
@@ -130,7 +136,7 @@ function runWorker(input: CompilerInput, signal: AbortSignal | undefined, spawn:
             execArgv: [],
             resourceLimits: { maxOldGenerationSizeMb: 128 },
         });
-        const timer = setTimeout(() => finish(new Error('compiler timed out after 5 seconds')), 5000);
+        const timer = setTimeout(() => finish(new Decline('compiler timed out after 5 seconds')), 5000);
         let finished = false;
         function finish(error?: Error, summary?: string): void {
             if (finished) {
@@ -147,17 +153,17 @@ function runWorker(input: CompilerInput, signal: AbortSignal | undefined, spawn:
             }
         }
         // A cancelled turn stops the worker at once instead of letting it run to its deadline.
-        const cancel = () => finish(new Error('cancelled'));
+        const cancel = () => finish(new Decline('cancelled'));
         signal?.addEventListener('abort', cancel, { once: true });
         worker.once('message', (result) => {
             if (typeof result?.summary !== 'string') {
-                finish(new Error('compiler failed'));
+                finish(new Decline('compiler failed'));
             } else {
                 finish(undefined, result.summary);
             }
         });
-        worker.once('error', () => finish(new Error('compiler worker failed')));
-        worker.once('exit', () => finish(new Error('compiler worker exited without a summary')));
+        worker.once('error', () => finish(new Decline('compiler worker failed')));
+        worker.once('exit', () => finish(new Decline('compiler worker exited without a summary')));
     });
 }
 
@@ -170,22 +176,151 @@ export function unwrapTags(text: string): string {
     return text.replace(/<(\/?)(summary)/gi, '<$1_$2');
 }
 
+// Each compaction's segment starts with one marker line: `[Blackhole segment 3 · #e120..#e480 · 42 messages · h1a2b3c4d]`.
+// It needs no storage: the number continues from the previous summary. The hash is of the segment's text, so a marker
+// copied into other text (a model summary that folded ours in) does not count. Quoted text cannot forge one either:
+// `unmark` changes the marker's opening in every new segment.
+const SEGMENT_OPEN = '[Blackhole segment ';
+const SEGMENT_LINE = /(?:^|\n\n---\n\n)\[Blackhole segment (\d{1,9}) · ([^\]\n]{1,200}) · h([0-9a-f]{8})\]\n/g;
+
+/** Quoted text in a new segment cannot open a marker line. Recall still returns the original text. */
+export function unmark(text: string): string {
+    return text.replaceAll(SEGMENT_OPEN, '[Blackhole_segment ');
+}
+
+function segmentHash(text: string): string {
+    return createHash('sha256').update(text).digest('hex').slice(0, 8);
+}
+
+/** The marker line of a new segment: its number, the entry ids it covers, how many messages it compiled, and a hash. */
+export function segmentMarker(previous: string, ids: readonly (number | undefined)[], messages: number, text: string): string {
+    // Count, not the highest number: a forged marker with a huge number cannot push later ones past what the
+    // marker pattern reads.
+    // `previous` has no recall note: parse it as is. Stripping again could cut a segment's own last paragraph.
+    const last = parseSegments(previous).segments.length;
+    const known = ids.filter((id) => id !== undefined);
+    const low = Math.min(...known);
+    const high = Math.max(...known);
+    const covers = known.length === 0 ? 'no refs' : low === high ? `#e${low}` : `#e${low}..#e${high}`;
+    return `${SEGMENT_OPEN}${last + 1} · ${covers} · ${messages} message${messages === 1 ? '' : 's'} · h${segmentHash(text)}]`;
+}
+
+/** What `/blackhole-status` shows of a summary: its segments, and any text before the first marker. */
+export type SummaryShape = {
+    /** It ends with this module's recall note: Blackhole wrote the newest part. */
+    hasRecallNote: boolean;
+    chars: number;
+    /** Characters before the first verified marker: native prose, Blackhole before 0.3.0, or copied markers. */
+    unmarked: number;
+    /** Verified segments. `start` and `end` bound each segment's text, without its marker line. */
+    segments: Segment[];
+};
+type Segment = { n: number; label: string; chars: number; start: number; end: number };
+
+/**
+ * Split summary text, without a recall note, on its marker lines. A marker counts only when its hash matches the text
+ * up to the next marker line or the end. Unverified ones, and all text before the first verified one, are older text.
+ */
+function parseSegments(text: string): { unmarked: number; segments: Segment[] } {
+    const marks = [...text.matchAll(SEGMENT_LINE)];
+    const segments: Segment[] = [];
+    let unmarked = text.length;
+    marks.forEach((match, i) => {
+        const start = match.index + match[0].length;
+        const end = i + 1 < marks.length ? marks[i + 1].index : text.length;
+        if (end < start || segmentHash(text.slice(start, end)) !== match[3]) {
+            return;
+        }
+        if (segments.length === 0) {
+            unmarked = match.index;
+        }
+        segments.push({ n: Number(match[1]), label: match[2], chars: end - start, start, end });
+    });
+    return { unmarked, segments };
+}
+
+/** The shape of a summary body (inside Pocket's wrapper), recall note included. */
+export function summaryShape(body: string): SummaryShape {
+    const text = stripRecallNote(body);
+    return { hasRecallNote: text !== body, chars: body.length, ...parseSegments(text) };
+}
+
+/**
+ * PiP keeps its own summarizer and its own view of outside text. `host.pip` is internal: when it is missing, the
+ * module cannot tell, so every caller fails closed.
+ */
+function pipCheck(host: Host, conversationId: number): 'missing' | 'pip' | 'ok' {
+    if (typeof host.pip?.ownerOf !== 'function') {
+        return 'missing';
+    }
+    return host.pip.ownerOf(conversationId) === undefined ? 'ok' : 'pip';
+}
+
+/** In-memory facts for warnings and `/blackhole-status`. None of it is durable; losing it on reload is safe. */
+export type State = {
+    /** The last automatic decline warning per conversation, to rate-limit repeats. */
+    warned: Warned;
+    /** The last decline of any kind per conversation, cleared by a success. */
+    declined: Map<number, { reason: string; trigger: string; at: number; upTo: number }>;
+    /** Context windows by `provider/modelId`, learned when the hook runs. Commands get no model registry. */
+    windows: Map<string, number>;
+};
+
+export function newState(): State {
+    return { warned: new Map(), declined: new Map(), windows: new Map() };
+}
+
+/** Sessions each in-memory map remembers. */
+export const MAX_REMEMBERED = 1000;
+
+/** Set a key in a map of at most MAX_REMEMBERED entries, dropping the oldest first. */
+function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
+    map.delete(key);
+    if (map.size >= MAX_REMEMBERED) {
+        map.delete(map.keys().next().value!);
+    }
+    map.set(key, value);
+}
+
+type ModelRef = { provider: string; modelId: string };
+
+function modelKey(ref: ModelRef): string {
+    return `${ref.provider}/${ref.modelId}`;
+}
+
+/** Note the model's context window for status. Only reads the registry, never calls a model, and never fails. */
+function learnWindow(state: State, models: { getModel(provider: string, id: string): { contextWindow?: number } | undefined }, ref: ModelRef | undefined): void {
+    if (!ref) {
+        return;
+    }
+    try {
+        const window = models.getModel(ref.provider, ref.modelId)?.contextWindow;
+        if (typeof window === 'number' && Number.isFinite(window) && window > 0) {
+            remember(state.windows, modelKey(ref), window);
+        }
+    } catch {
+        // Status shows the window as unknown.
+    }
+}
+
 // Exported for direct failure-path tests. Production always uses the bundled worker.
-export function createBeforeCompact(host: Host, compiler: Compiler = compileInWorker): CompactionHooks['beforeCompact'] {
-    // Only rate-limits warnings, so it is not durable state. Losing it on reload or restart costs one extra warning.
-    const warned: Warned = new Map();
+export function createBeforeCompact(host: Host, compiler: Compiler = compileInWorker, state: State = newState()): CompactionHooks['beforeCompact'] {
+    const { warned } = state;
     return async (input, api, context) => {
         try {
             // Missing PiP detection is unsafe: decline instead of guessing.
-            if (typeof host.pip?.ownerOf !== 'function') {
-                throw new Error('PiP ownership API unavailable');
+            const pip = pipCheck(host, api.conversationId);
+            if (pip === 'missing') {
+                throw new Decline('PiP ownership API unavailable');
             }
-            if (host.pip.ownerOf(api.conversationId) !== undefined) {
+            if (pip === 'pip') {
                 return undefined;
             }
+            // Learn the window first, so status knows it even when this compaction declines.
+            const agent = await api.snapshot(AgentDoc, api.conversationId, context);
+            learnWindow(state, api.models, agent?.model);
             bounded(input.messages);
             const { previous, fresh } = splitPrevious(input);
-            const agent = await api.snapshot(AgentDoc, api.conversationId, context);
             const ids = sourceIds(input.entries, fresh);
             const compiled = await compiler({
                 messages: [...fresh],
@@ -193,14 +328,17 @@ export function createBeforeCompact(host: Host, compiler: Compiler = compileInWo
                 sourceIndices: ids.map((id) => (id === undefined ? undefined : REF_BASE + id)),
                 cwd: agent?.cwd ?? process.cwd(),
             }, context.abortSignal);
-            const segment = unwrapTags(entryRefs(compiled, ids));
-            if (!segment.trim()) {
-                throw new Error('compiler returned an empty summary');
+            const extracted = unmark(unwrapTags(entryRefs(compiled, ids)));
+            if (!extracted.trim()) {
+                throw new Decline('compiler returned an empty summary');
             }
+            // The marker counts conversation messages only, not system prompt markers, and its range covers the same.
+            const spoken = fresh.flatMap((message, i) => ((message.role as string) === 'system' ? [] : [ids[i]]));
+            const segment = `${segmentMarker(previous, spoken, spoken.length, extracted)}\n${extracted}`;
             const body = previous ? `${previous}${SEPARATOR}${segment}` : segment;
             const summary = `${body}${SEPARATOR}${RECALL_NOTE}`;
             if (summary.length > MAX_SUMMARY_CHARS) {
-                throw new Error('summary exceeds 1 MiB character limit');
+                throw new Decline('summary exceeds 1 MiB character limit');
             }
             // System/tool definitions are reinserted by generation. Counting
             // them as savings could accept an append that actually grows context.
@@ -208,25 +346,33 @@ export function createBeforeCompact(host: Host, compiler: Compiler = compileInWo
                 sum + (message.role === 'system' ? 0 : estimateMessageTokens(message)), 0);
             const after = estimateMessageTokens({ role: 'user', content: PREFIX + summary + SUFFIX, timestamp: 0 });
             if (after >= before) {
-                throw new Error('summary does not reduce estimated context tokens');
+                throw new Decline('summary does not reduce estimated context tokens');
             }
             warned.delete(api.conversationId);
+            state.declined.delete(api.conversationId);
             if (input.instructions) {
                 host.notice('info', 'Blackhole uses deterministic extraction. Custom compaction instructions are not interpreted.', api.conversationId);
             }
             return { summary };
         } catch (error) {
             // Never return undefined here: that would invoke the native model summarizer.
-            const reason = error instanceof Error ? error.message : 'unknown compiler error';
             if (context.abortSignal?.aborted) {
                 // A cancel is the owner's act, not a failure: nothing to warn about.
                 return { decline: true };
             }
+            const reason = error instanceof Decline ? error.message : 'internal error';
+            // The newest entry this compaction saw. A later reset or compaction makes the decline old news.
+            const upTo = input.entries.reduce((max, entry) => Math.max(max, entry.id), 0);
+            remember(state.declined, api.conversationId, { reason, trigger: input.reason, at: Date.now(), upTo });
             // Only automatic (threshold) declines repeat. A manual or overflow compaction always says why it failed:
             // after an overflow decline, the turn fails, and the reason must be in sight.
             if (input.reason !== 'threshold' || shouldWarn(warned, api.conversationId, reason, Date.now())) {
                 host.notice('warning', `Blackhole couldn't compact this session (${reason}). Nothing changed, and no model was used. `
                     + 'To free space: start a new context with /reset, fork, or turn off blackhole.ts in Extensions to use the model summarizer.', api.conversationId);
+                if (!(error instanceof Decline)) {
+                    // Server-wide: Pocket's log, and members of the server, never people invited to one session only.
+                    host.notice('error', `Blackhole compaction failed in session ${api.conversationId}: ${error instanceof Error ? error.message : String(error)}`);
+                }
             }
             return { decline: true };
         }
@@ -234,7 +380,6 @@ export function createBeforeCompact(host: Host, compiler: Compiler = compileInWo
 }
 
 export const WARN_AGAIN_MS = 30 * 60 * 1000;
-export const MAX_WARNED = 1000;
 /** The last decline warning per conversation. */
 type Warned = Map<number, { reason: string; at: number }>;
 
@@ -244,11 +389,7 @@ export function shouldWarn(warned: Warned, conversationId: number, reason: strin
     if (last && last.reason === reason && now - last.at < WARN_AGAIN_MS) {
         return false;
     }
-    warned.delete(conversationId);
-    if (warned.size >= MAX_WARNED) {
-        warned.delete(warned.keys().next().value!);
-    }
-    warned.set(conversationId, { reason, at: now });
+    remember(warned, conversationId, { reason, at: now });
     return true;
 }
 
@@ -299,22 +440,28 @@ function splitPrevious(input: Input): { previous: string; fresh: readonly Messag
     const model = marker.model;
     const first = input.messages[0];
     if (model?.length !== 1 || JSON.stringify(first) !== JSON.stringify(model[0]) || first?.role !== 'user') {
-        throw new Error('unrecognized previous compaction marker');
-    }
-    const text = typeof first.content === 'string'
-        ? first.content
-        : first.content.map((part) => {
-            if (part.type !== 'text') {
-                throw new Error('non-text previous compaction marker');
-            }
-            return part.text;
-        }).join('');
-    if (!text.startsWith(PREFIX) || !text.endsWith(SUFFIX)) {
-        throw new Error('unrecognized previous summary wrapper');
+        throw new Decline('unrecognized previous compaction marker');
     }
     // Keep native prose and prior segments byte-for-byte, without recompiling them. Only this adapter's own
     // trailing recall note is removed, and the new summary adds it back at its end.
-    return { previous: stripRecallNote(text.slice(PREFIX.length, -SUFFIX.length)), fresh: input.messages.slice(1) };
+    return { previous: stripRecallNote(summaryBody(first)), fresh: input.messages.slice(1) };
+}
+
+/** The text inside Pocket's summary wrapper. Throws when the message is not a wrapped text summary. */
+function summaryBody(message: Message): string {
+    const content = message.content as string | { type: string; text?: string }[];
+    const text = typeof content === 'string'
+        ? content
+        : content.map((part) => {
+            if (part.type !== 'text') {
+                throw new Decline('non-text previous compaction marker');
+            }
+            return part.text ?? '';
+        }).join('');
+    if (!text.startsWith(PREFIX) || !text.endsWith(SUFFIX)) {
+        throw new Decline('unrecognized previous summary wrapper');
+    }
+    return text.slice(PREFIX.length, -SUFFIX.length);
 }
 
 // ── Recall ──────────────────────────────────────────────────────────────
@@ -429,12 +576,12 @@ type Stop = 'done' | 'start' | 'reset' | 'cap';
  * The walk visits the newest reset, then stops: nothing before it is recallable. It never visits more than
  * MAX_WALK_ENTRIES. Small read-only commits keep each hold on the Session line short.
  */
-async function walk(api: Reader, context: Context, visit: (entry: EntryRecord, edit: Edit | undefined) => boolean): Promise<Stop> {
+async function walk(api: Reader, context: Context, visit: (entry: EntryRecord, edit: Edit | undefined) => boolean, signal = context.abortSignal): Promise<Stop> {
     const edits = new Map<EntryId, Edit>();
     let scanned = 0;
     let max: EntryId | undefined;
     for (;;) {
-        context.abortSignal?.throwIfAborted();
+        signal?.throwIfAborted();
         const items = await api.commit(async (tx: Tx) => (await tx.scanEntries({
             conversationId: api.conversationId,
             ...(max === undefined ? {} : { maxEntryId: max }),
@@ -629,10 +776,11 @@ export function createRecallTool(host: Host) {
         replay: 'safe',
         execute: async (args, api, context) => {
             // Missing PiP detection is unsafe: refuse instead of guessing.
-            if (typeof host.pip?.ownerOf !== 'function') {
+            const pip = pipCheck(host, api.conversationId);
+            if (pip === 'missing') {
                 throw new Error(`${RECALL_TOOL} is unavailable: Pi Pocket's PiP check is missing.`);
             }
-            if (host.pip.ownerOf(api.conversationId) !== undefined) {
+            if (pip === 'pip') {
                 throw new Error(`${RECALL_TOOL} does not work in PiP. PiP keeps its own summaries.`);
             }
             const ids = [...new Set(args.ids ?? [])];
@@ -656,10 +804,159 @@ export function createRecallTool(host: Host) {
     }), { annotations: { readOnlyHint: true } });
 }
 
-export default function blackhole(host: Host) {
+// ── Status ──────────────────────────────────────────────────────────────
+
+export const STATUS_COMMAND = 'blackhole-status';
+const SHOWN_SEGMENTS = 10;
+const MAX_STATUS_MESSAGES = 5000;
+
+/** The members of Pocket's command context that status uses (types/pocket.d.ts `CommandContext`). */
+type StatusContext = {
+    readonly conversationId: number;
+    readonly signal: AbortSignal;
+    readonly context: Context;
+    snapshot(doc: typeof AgentDoc, conversationId: number, context: Context): Promise<{ model?: ModelRef } | undefined>;
+    commit<T>(change: (tx: Tx) => T | Promise<T>): Promise<T>;
+};
+
+const count = (n: number) => n.toLocaleString('en-US');
+function tokens(n: number): string {
+    if (n >= 1_000_000) {
+        return `${Number((n / 1_000_000).toFixed(1))}M`;
+    }
+    return n < 1000 ? `${n}` : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+}
+const percent = (part: number, whole: number) => `${Math.max(part > 0 ? 1 : 0, Math.round((part / whole) * 100))}%`;
+const TRIGGERS: Record<string, string> = { threshold: 'automatic', manual: 'manual', overflow: 'context full' };
+/** Show the summary's share of the 1 MiB limit only once it matters. */
+const SHOW_LIMIT_FROM = 0.5;
+
+function ago(ms: number): string {
+    const minutes = Math.floor(ms / 60_000);
+    if (minutes < 1) {
+        return 'just now';
+    }
+    return minutes < 120 ? `${minutes} min ago` : `${Math.floor(minutes / 60)} h ago`;
+}
+
+/**
+ * Plain-text status of the calling session's summary. Reads only that session's visible entries, newest first, up
+ * to the newest compaction or reset, through the same walk as recall.
+ */
+export async function status(host: Host, state: State, ctx: StatusContext, now = Date.now()): Promise<string> {
+    const lines = ['Blackhole status'];
+    const pip = pipCheck(host, ctx.conversationId);
+    if (pip === 'missing') {
+        lines.push('Pocket\'s PiP check is missing, so Blackhole declines every compaction and recall refuses to run.');
+        return lines.join('\n');
+    }
+    if (pip === 'pip') {
+        lines.push('This is a PiP session. PiP keeps its own summarizer, and recall is off here.');
+        return lines.join('\n');
+    }
+    const reader: Reader = { conversationId: ctx.conversationId as never, commit: ((change: (tx: Tx) => unknown) => ctx.commit(change)) as Reader['commit'] };
+    // One indexed read finds where context starts: the newest entry with a head (a compaction or a reset). Only the
+    // entries after it are walked, up to a bounded count of messages.
+    ctx.signal.throwIfAborted();
+    const marker = await ctx.commit((tx) => tx.latestHeadMarker(ctx.conversationId as never));
+    let since = 0;
+    let sinceTokens = 0;
+    let more = false;
+    let markerEdit: Edit | undefined;
+    if (marker && CompactionEntry.is(marker)) {
+        await walk(reader, ctx.context, (entry, edit) => {
+            if (entry.id <= marker.id) {
+                markerEdit = entry.id === marker.id ? edit : undefined;
+                return true;
+            }
+            if (since >= MAX_STATUS_MESSAGES) {
+                more = true;
+                return true;
+            }
+            // Count what Pi sees, as recall does: edits apply, and aborted or failed turns are left out.
+            for (const part of entryContent(entry, edit)?.parts ?? []) {
+                if (part.role === 'system') {
+                    continue;
+                }
+                since += 1;
+                sinceTokens += estimateMessageTokens({ role: 'user', content: part.text, timestamp: 0 });
+            }
+            return false;
+        }, ctx.signal);
+    }
+    const agent = await ctx.snapshot(AgentDoc, ctx.conversationId, ctx.context);
+    const model = agent?.model;
+    if (!marker || !CompactionEntry.is(marker)) {
+        lines.push('No compaction in this context yet.');
+    } else {
+        // An edit can replace or hide the summary, as Pi sees it.
+        const summaryMessages = markerEdit?.action === 'omit' ? [] : markerEdit?.action === 'replace' ? markerEdit.messages : (marker.model ?? []);
+        let body: string | undefined;
+        try {
+            body = summaryMessages.length === 1 ? summaryBody(summaryMessages[0]) : undefined;
+        } catch {
+            body = undefined;
+        }
+        if (body === undefined) {
+            lines.push('The newest summary has a shape Blackhole does not read.');
+        } else {
+            const shape = summaryShape(body);
+            const estimate = estimateMessageTokens({ role: 'user', content: PREFIX + body + SUFFIX, timestamp: 0 });
+            lines.push(`Summary: about ${tokens(estimate)} tokens (${count(shape.chars)} characters).`);
+            const window = model ? state.windows.get(modelKey(model)) : undefined;
+            lines.push(window === undefined
+                ? 'Window: not known yet (learned at the next compaction).'
+                : `Summary is ${percent(estimate, window)} of the ${tokens(window)} window (${model!.modelId}).`);
+            if (shape.chars >= MAX_SUMMARY_CHARS * SHOW_LIMIT_FROM) {
+                lines.push(`Size limit: ${percent(shape.chars, MAX_SUMMARY_CHARS)} of 1 MiB used. At the limit, compaction declines.`);
+            }
+            if (!shape.hasRecallNote) {
+                lines.push('The model summarizer wrote this summary, or Blackhole was off. Blackhole adds segments at its next compaction.');
+            } else if (shape.segments.length === 0) {
+                lines.push('No segment lines yet (written before 0.3.0). The next compaction starts segment 1.');
+            } else {
+                const shown = shape.segments.slice(-SHOWN_SEGMENTS);
+                lines.push(shown.length < shape.segments.length
+                    ? `Segments: ${shape.segments.length}. Newest ${shown.length}, oldest first:`
+                    : `Segments: ${shape.segments.length}, oldest first:`);
+                for (const segment of shown) {
+                    lines.push(`- ${segment.n} · ${segment.label} · ${count(segment.chars)} characters`);
+                }
+                if (shape.unmarked > 0) {
+                    lines.push(`Older text before segment ${shape.segments[0].n}: ${count(shape.unmarked)} characters.`);
+                }
+            }
+            lines.push(more
+                ? `Since then: more than ${count(MAX_STATUS_MESSAGES)} messages.`
+                : `Since then: ${count(since)} message${since === 1 ? '' : 's'}, about ${tokens(sinceTokens)} tokens.`);
+        }
+    }
+    const declined = state.declined.get(ctx.conversationId);
+    // A reset or compaction after the decline makes it old news.
+    if (declined && (!marker || marker.id <= declined.upTo)) {
+        lines.push(`Last decline: ${declined.reason} (${TRIGGERS[declined.trigger] ?? declined.trigger}, ${ago(now - declined.at)}).`);
+    }
+    return lines.join('\n');
+}
+
+export function createStatusCommand(host: Host, state: State) {
+    return {
+        description: 'Show the size of this session\'s Blackhole summary, its segments, and its last decline',
+        scope: 'conversation' as const,
+        handler: async (_args: string, ctx: StatusContext) => ({ type: 'card' as const, output: await status(host, state, ctx) }),
+    };
+}
+
+/** The member of Pocket's `Web` that this module uses (types/pocket.d.ts). */
+type Web = { command(name: string, command: ReturnType<typeof createStatusCommand>): void };
+
+export default function blackhole(host: Host, web?: Web) {
+    // One state per loaded version: the hook fills it, the status command reads it.
+    const state = newState();
+    web?.command(STATUS_COMMAND, createStatusCommand(host, state));
     return defineExtension({
         name: 'blackhole-deterministic',
         tools: [createRecallTool(host)],
-        hooks: [hook(CompactionTask, { beforeCompact: createBeforeCompact(host) })],
+        hooks: [hook(CompactionTask, { beforeCompact: createBeforeCompact(host, compileInWorker, state) })],
     });
 }

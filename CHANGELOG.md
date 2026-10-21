@@ -2,6 +2,28 @@
 
 What changed in each version, in plain terms. Newest first.
 
+## 0.3.0 (2026-10-21)
+
+See how big a session's summary is getting, before it becomes a problem.
+
+### Added
+
+- **`/blackhole-status`.** Type it in a session to see the summary's size, its share of the model's context window, its segments, and the last time compaction declined. It posts a card for everyone in the session, and the card stays in the session and its export. Pi never sees it.
+- **Numbered segments.** Each compaction's part of the summary now starts with a line such as `[Blackhole segment 3 · #e120..#e480 · 42 messages · h1a2b3c4d]`. It tells you which messages that part covers. The short hash at the end lets Blackhole check that the line belongs to the text after it. Later versions will use these lines to shrink old parts.
+
+### Changed
+
+- **Unexpected errors stay private.** When compaction fails for a reason Blackhole didn't expect, the session's warning says "internal error". The details, which can name folders on the server, go to Pocket's log and the server's members instead.
+
+### Good to know
+
+- Summaries written before 0.3.0 have no segment lines. Status counts them as older text, and the first new segment is number 1.
+- The context window shows as "not known yet" until Blackhole has run a compaction with that model since Pi Pocket started or the module reloaded.
+
+### Updating
+
+Copy `blackhole.ts`. The files in `blackhole/` did not change, so no restart is needed.
+
 ## 0.2.2 (2026-10-21)
 
 Fixes for cancelling, warnings, and compatibility.

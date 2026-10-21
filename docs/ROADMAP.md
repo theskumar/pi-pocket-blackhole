@@ -6,25 +6,13 @@ This list comes from three reviews in October 2026: a comparison with upstream p
 
 Effort: **S** is under a day, **M** is a few days, **L** is a week or more.
 
-## Next: 0.3.0, keep long sessions working
+## Next: 0.4.0, keep long sessions working
 
-Today the summary has two limits: 1 MiB of characters (about 250k tokens), and it must be smaller than what it replaces. Neither one knows the model's context window. A long session's summary can grow until the summary plus the kept tail no longer fits, and every turn then overflows. These items fix that, and make the growth visible before it hurts.
+Today the summary has two limits: 1 MiB of characters (about 250k tokens), and it must be smaller than what it replaces. Neither one knows the model's context window. A long session's summary can grow until the summary plus the kept tail no longer fits, and every turn then overflows. 0.3.0 added segment markers and `/blackhole-status`, so growth is visible and segments can be split. These items act on it.
 
-### Segment markers (S)
+### Growth notice (S)
 
-Start each compaction's segment with one line, such as `[Blackhole segment 3 · #e120..#e480 · 42 msgs]`.
-
-- **Why:** segments are joined with `---`, which the compiler also uses inside a segment. Stored summaries cannot be split back into segments. The next three items need that split.
-- **Upstream:** `[Blackhole Append Segment N]` plus a coverage line (`compaction-chain.ts`).
-- **Note:** summaries from 0.2.x stay one unparsed block. Treat that block as one old segment.
-
-### Status command and compaction notice (S)
-
-Add `/blackhole-status`. Also send a short notice when the summary passes a growth threshold, such as "summary about 60k tokens (30% of the window)". Not after every compaction: 0.2.2 cut repeated notices, and Pocket already says "Compacted." after a manual compaction.
-
-- **Shows:** summary characters, estimated tokens and share of the context window, segment count, share of native prose, ref count.
-- **Why:** growth is invisible until compaction starts to decline.
-- **How:** `CommandContext.commit` reads the latest head marker. Send the notice to the session only.
+Send a short notice to the session when the summary passes a share of the context window, such as "summary about 60k tokens (30% of the window)". Once per threshold, not after every compaction: 0.2.2 cut repeated notices, and Pocket already says "Compacted." after a manual compaction.
 
 ### Shrink the summary by the context window (M)
 
@@ -33,11 +21,13 @@ When the summary passes a share of the model's context window, or the compaction
 - **Keep:** each segment's header sections (goals, files, commits, errors, preferences), and all native prose.
 - **Leave:** one pointer line per cut, such as `brief omitted: #e120..#e480, use blackhole_recall`. Recall still returns the full text.
 - **Budget:** a fraction of `contextWindow` from the hook API's `models.getModel`. The hook cannot read `reserveTokens`.
-- **Tests:** the unit-test stub throws on any access to `models`. Narrow that guard to "no stream or complete call", so reading `getModel` is allowed and calling a model still fails.
+- **Segments:** split on verified 0.3.0 marker lines (`summaryShape` gives each segment's `start` and `end`). Text before the first verified marker (native prose, or 0.2.x segments) is never cut.
+- **Forged markers:** text from before 0.3.0 never went through `unmark`, and the hash is public. Before cutting, check that a segment's range holds entries of this session, and cut only segments after the newest Blackhole-written summary began.
+- **Pointer:** a range such as `#e120..#e480` cannot be followed today. Entry ids are global, and recall takes at most 20 ids. Add a recall option that pages through this session's own entries in an id range, such as `range: [120, 480]`, and point to it.
 - **Changes a promise:** the README says that earlier summaries stay byte-for-byte. Rewrite it as "native prose stays byte-for-byte; Blackhole segments can shrink, and recall restores them".
 - **Upstream:** rebase on overflow, on capacity pressure, and when the chain passes window/8 (`compaction-chain.ts`).
 
-## Then: 0.3.x, better summaries and recall
+## Then: 0.4.x, better summaries and recall
 
 ### Merge old segments' header sections (M)
 
@@ -81,6 +71,7 @@ Summaries copy user text and tool output into sections such as `[Outstanding Con
 - Install pinned `typescript` and `@types/node` into a tools folder, like `build/`.
 - Add `tsc --noEmit` to `npm run check`, with Pocket's strict tsconfig.
 - Allow that one type import in the gallery-rules test.
+- Check the module's inline copies of Pocket types (`Host`, `Web`, `StatusContext`, `ModelRef`) with `satisfies` against `types/pocket.d.ts` in a test-only file.
 - First check that Pocket's Share check accepts the linked `_pocket.d.ts`, and update the import rule in `CONTEXT.md`, which forbids type imports from a Pocket checkout.
 
 ### CI on GitHub (M)
