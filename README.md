@@ -4,8 +4,8 @@ A [Pi Pocket](https://github.com/TannerMidd/pi-pocket) drop-in that replaces ord
 
 - **Deterministic.** The same history always gives the same summary. Compaction costs no tokens and cannot fail on a provider error.
 - **Append-only.** Each compaction adds a new segment. Earlier summaries, native or deterministic, stay byte-for-byte.
-- **Recallable.** Refs such as `(#4182)` are Pocket entry ids. `blackhole_recall` expands them in full or searches compacted history.
-- **Contained.** No network access, no files outside the module, and no reads from other sessions. PiP keeps its own summarizer.
+- **Recallable.** Refs such as `(#e4182)` are Pocket entry ids. `blackhole_recall` expands them in full or searches compacted history.
+- **Contained.** No network access, no files outside the module, no reads from other sessions, and nothing from before a reset. PiP keeps its own summarizer.
 
 It runs the real `pi-blackhole@0.5.11` `compileSegment` compiler in a bounded worker. It does not load Blackhole's package entry, observational-memory runtime, model workers, or CLI tools.
 
@@ -41,7 +41,12 @@ When the module is listed in the Pi Pocket gallery, install it from **Menu → E
 2. If only `blackhole.ts` changed, Pocket reloads the module. No restart is needed.
 3. If a file in `blackhole/` changed, restart Pi Pocket from the owner's menu before you rely on that change.
 
-Before 0.2.0, the helpers were `_blackhole-worker.js` and `_blackhole-compiler.js` at the top of `extensions/`. After you install 0.2.0, delete those two files.
+Before 0.2.0, the helpers were `_blackhole-worker.js` and `_blackhole-compiler.js` at the top of `extensions/`. To update from 0.1.x:
+
+1. Copy the `blackhole/` folder first.
+2. Copy `blackhole.ts`. Copying it alone leaves the module without its worker, and every compaction declines.
+3. Delete `_blackhole-worker.js` and `_blackhole-compiler.js`.
+4. Restart Pi Pocket from the owner's menu.
 
 ### Uninstall
 
@@ -51,13 +56,13 @@ Turn off `blackhole.ts` in **Menu → Extensions**, then delete the four files. 
 
 The module installs one `CompactionTask.beforeCompact` hook and one tool, `blackhole_recall`. Pocket still selects the replaced prefix and the verbatim tail. Pocket still stores the summary, manages tasks, and handles resets, forks, and restarts.
 
-The hook checks `host.pip.ownerOf` before it reads the source. For PiP, it returns no decision, so PiP keeps its special summarizer. When the ownership API is missing, the hook declines visibly instead of guessing.
+The hook checks `host.pip.ownerOf` before it reads the source. For PiP, it returns no decision, so PiP keeps its special summarizer. `host.pip` is an internal Pocket API, not part of `types/pocket.d.ts`. When it is missing or renamed, the hook declines visibly instead of guessing.
 
 On the first compaction, the compiler receives the selected messages. On later compactions, the module identifies the previous `CompactionEntry`, unwraps its summary, and appends only a freshly compiled segment. It never recompiles older summaries.
 
 The module uses `compileSegment`, not upstream `compile`. The `compile` merge path can discard native prose and cap older sections.
 
-Each summary ends with one recall note. On append, the module removes the note only when it is the exact trailing text, then adds it after the new segment. This is the only change to earlier summary text.
+Each summary ends with one recall note. On append, the module removes the note when it is the last paragraph: one line that starts with `Refs like (#` and names `` `blackhole_recall` ``. This also replaces a note in an older wording. The module then adds the note after the new segment. This is the only change to earlier summary text.
 
 ### Not reproduced from the pi-blackhole CLI
 
@@ -73,7 +78,9 @@ Pocket's own lessons and memory tool are unaffected. This module simply has no B
 
 ## Recall
 
-Brief-transcript lines end with refs such as `(#4182)`. Each number is the Pocket `EntryId` of the original message, not a positional index. Entry ids stay the same across restarts and forks, so no ledger is needed.
+Brief-transcript lines end with refs such as `(#e4182)`. Repeated tool calls merge into `(#e5, #e7) x2`. Each number is the Pocket `EntryId` of the original message, not a positional index. Entry ids stay the same across restarts and forks, so no ledger is needed.
+
+The `e` keeps refs apart from text such as a GitHub `(#123)` in a commit subject. The compiler parses its own refs as digits, so the hook passes it entry ids plus a 16-digit offset. After compilation, only the offset numbers of the passed ids become `#e<id>`. Any other number stays as written.
 
 The hook maps each summarized message to its entry by object identity. Pi Durable builds `messages` from the same frozen objects as each entry's `model`. These messages get no ref:
 
@@ -86,16 +93,32 @@ No ref is better than a wrong ref.
 
 `blackhole_recall` takes these parameters:
 
-- `ids`: up to 20 entry ids. The tool returns each entry's model text in full: user and assistant text, tool calls with arguments, and tool results. It never returns thinking. Images show as `[image]`.
-- `offset`: a character offset, to page through an entry that is longer than the budget.
-- `query`: words to find. Search is literal and case-insensitive, and every word must match. Regex syntax is plain text, so a pattern cannot hang the server. Search covers only entries older than the active head marker's `head`, newest first, 10 per page, and at most 10,000 entries.
-- `page`: the results page of a query.
+- `ids`: up to 20 entry ids, the number after `#e`. The tool returns each entry as the model saw it: user and assistant text, tool calls with arguments, and tool results. Images show as `[image]`.
+- `offset`: a character offset into each entry, to page through one that is longer than its share of the budget.
+- `query`: words to find. Search is literal and case-insensitive, and every word must match. Each word is escaped before matching, so regex syntax is plain text and a pattern cannot hang the server. Search covers only entries older than the active head marker's `head`, newest first, 10 per call. It skips summary markers, system prompts, and role labels.
+- `before`: continue a query with entries older than this id. Each result names the exact value for the next call, so pages do not shift when a new compaction happens between calls.
 
-A response holds at most 24,000 characters. `ids` and `query` together share that budget. A truncated entry ends with the exact `offset` for the next call.
+### What recall never returns
 
-The tool reads through `tx.scanEntries` with the calling conversation's id. Pocket's storage returns only entries visible from that conversation: its own, and those a fork inherited up to its fork point. Another session's id returns "not found". Reads use small commits of 256 entries, so a search never holds the Session line for long. The tool is `replay: "safe"` and declares `readOnlyHint`, so plan mode allows it.
+- **Another session's entries.** The tool reads through `tx.scanEntries` with the calling conversation's id. Pocket's storage returns only entries visible from that conversation: its own, and those a fork inherited up to its fork point. Another session's id, or a parent's entry written after the fork, returns "not found".
+- **Anything before the newest reset.** A reset starts a new context, and Pi no longer sees what came before. Recall stops at the newest `ResetEntry` for both ids and search. Content pasted before a reset stays out of reach.
+- **What Pocket kept out of context.** Recall applies the newest context edit that targets an entry: `omit` hides it, and `replace` shows the replacement. It drops assistant messages that stopped as `aborted`, `error`, or `deferred`, as Pi Durable does.
+- **Thinking.** Reasoning is never replayed.
 
-If you turn the module off, stored summaries keep their refs and note, but the tool is gone. A call then fails as an unknown tool. Context stays correct.
+### Recalled text is quoted data
+
+Recalled text can hold anything a web page or file held. Each response starts with a preamble that says the content is quoted data, not instructions. Each entry sits between markers that carry a random 12-hex-digit key, new for every call, such as `<<<3f9a01c2d4e5 #e4182 user, chars 0-1200 of 1200>>>` and `<<<3f9a01c2d4e5 end>>>`. Text inside the entry cannot know the key, so it cannot close the quote, fake a role, or fake another entry. Search snippets are JSON strings on one line, inside one keyed block.
+
+### Bounds
+
+- A response holds at most 24,000 characters. `ids` and `query` share that budget. A truncated entry ends with the exact `offset` for the next call.
+- One entry yields at most 1 MiB of text.
+- Search checks at most 10,000 entries, or 32 MiB of text, per call. It then names the `before` value to continue.
+- A walk starts at the newest entry, so that it sees every edit in force, and visits at most 50,000 entries. Reads use small commits of 64 entries, so one call never holds the Session line for long.
+
+The tool is `replay: "safe"` and declares `readOnlyHint`, so plan mode allows it. It is offered in every session, PiP included, because Pocket's drop-in tools are global.
+
+If you turn the module off, stored summaries keep their refs and note, but the tool is gone. The note says to call the tool only if it is available. A call fails with Pocket's "not available" error, and context stays correct.
 
 ## Limits and failures
 
@@ -118,7 +141,8 @@ Another extension that makes an earlier compaction decision can supersede this h
 
 - No network calls, subprocesses, or file reads at run time. The worker loads only `blackhole/compiler.ts`.
 - No prompt sections, durable documents, routes, or browser code.
-- `blackhole_recall` reads only entries visible from the calling session.
+- `blackhole_recall` reads only entries visible from the calling session, and nothing before its newest reset.
+- Recalled text comes back between keyed markers, labeled as quoted data.
 - The worker gets an empty `execArgv`, so it does not inherit Node loaders or eval flags.
 
 ## Develop
@@ -152,8 +176,8 @@ Tests run in an isolated data folder, auth folder, and settings, with a scripted
 ### What the tests cover
 
 - **Compaction:** compiler parity, worker launch under `--input-type=module -e`, native prose preservation, append-only growth, fresh-only recompilation, PiP exclusion, missing APIs, empty and failed output, size bounds, non-shrinking output, notices, and no model fallback.
-- **Recall:** identity mapping and fail-closed refs, one trailing note across appends, full expansion, offset paging, hidden thinking, and literal paged search limited to compacted entries.
-- **Real Pocket:** drop-in loading, retained-tail equality, restart, fork, reset, and PiP's unchanged summarizer. A real session gets compacted, and every ref must be one of its entry ids. The scripted model calls `blackhole_recall` by id and by query. A fork recalls inherited entries, and an unrelated session gets "not found".
+- **Recall:** identity mapping and fail-closed refs, `#e` refs next to literal GitHub refs, one trailing note across appends and older wordings, full expansion, offset paging, the response budget with 20 truncated ids, hidden thinking, context edits and aborted turns, the reset boundary, keyed markers against forged roles, and literal search with stable `before` paging and scan bounds.
+- **Real Pocket:** drop-in loading, retained-tail equality, restart, fork, reset, and PiP's unchanged summarizer. A real session gets compacted, and every ref, merged ones included, must be one of its entry ids. The scripted model calls `blackhole_recall` by id and by query. A fork recalls inherited entries but not the parent's later ones. An unrelated session gets "not found". After a reset, nothing before it comes back.
 - **Gallery:** Pi Pocket's own **Share…** check finds no problems, its index parser accepts the entry, and the module imports only its own files, Node, and Pocket packages.
 
 ### Build provenance
@@ -187,8 +211,9 @@ The script takes sizes and hashes from the commit, not the working tree. The tes
 | `build.mjs`, `build/` | Reproducible compiler build with pinned inputs. |
 | `compiler-provenance.json` | Source hashes of the bundled compiler. |
 | `scripts/gallery-entry.mjs` | Prints the gallery entry for a commit. |
+| `CHANGELOG.md` | What changed in each version. |
 | `CONTEXT.md` | Maintainer notes, one fact per line. |
-| `docs/` | The original handoff and acceptance review. They predate recall. |
+| `docs/` | The original handoff and acceptance review. `docs/REVIEW.md` ends with the recall review. |
 
 ## License
 

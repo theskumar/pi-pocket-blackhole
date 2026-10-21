@@ -11,12 +11,12 @@ Durable facts for maintaining this adapter. One fact per line.
 - Public repo: `theskumar/pi-pocket-blackhole`, MIT. Gallery module name `blackhole`; index repo `TannerMidd/pi-pocket-extensions`.
 - Pocket upstream: `TannerMidd/pi-pocket`. pi-blackhole upstream: `k0valik/pi-blackhole`, built on `sting8k/pi-vcc`.
 - Owner rules: no edits to the Pocket repo or live data, and no commits, deploys, or restarts without explicit approval.
-- Live install (2026-10-21): enabled, pre-recall `blackhole.ts` plus old `_blackhole-*.js` helpers. Deploying 0.2.0 needs the `blackhole/` folder and deletion of the old helpers.
+- Live install (2026-10-21): enabled, pre-recall `blackhole.ts` plus old `_blackhole-*.js` helpers. Deploying 0.2.x needs the `blackhole/` folder first, then `blackhole.ts`, deletion of the old helpers, and a restart.
 - Compare installed and local files with `shasum -a 256` before any claim about what is live.
 
 ## Build and test
 
-- Test: `npm test` (14 tests, about 10 s, real Pocket helpers, faux provider, no network).
+- Test: `npm test` (18 tests, about 10 s, real Pocket helpers, faux provider, no network).
 - Build: `npm run setup:build` once (pinned inputs into `build/node_modules/`), then `npm run build`. It rewrites `compiler-provenance.json`.
 - `~/.pi/agent/npm/node_modules/pi-blackhole` is 0.5.13 now; never build from it. `build.mjs` refuses versions other than 0.5.11.
 - Rebuilt bundle code is identical to the reviewed 0.5.11 bundle; only path comments and the banner changed.
@@ -56,9 +56,14 @@ Durable facts for maintaining this adapter. One fact per line.
 
 - Refs `(#N)` are Pocket entry ids, passed to `compileSegment` as `sourceIndices`. Unknown or ambiguous messages get `undefined`.
 - Use `compileSegment`, never upstream `compile`. `compile` merges, caps, and can drop older native prose.
-- Each summary ends with exactly one `RECALL_NOTE`. On append, the note is stripped only when it is the exact trailing text.
-- Never put a literal example ref such as `(#123)` in the note. Tests treat every `(#digits)` as a real ref.
+- Refs are `(#e<id>)`. The compiler gets `REF_BASE + id` (16 digits) because it parses refs with `\d+`; `entryRefs` rewrites only passed ids. GitHub `(#123)` stays literal.
+- Each summary ends with exactly one `RECALL_NOTE`. On append, a last paragraph that is one line, starts with `Refs like (#`, and names `` `blackhole_recall` `` is stripped, in any wording.
+- Never put a digit ref example such as `(#e123)` in the note. Tests treat every `#e<digits>` as a real ref.
 - Recall search is literal and case-insensitive with AND terms. No user regex, to avoid ReDoS on the server thread.
-- Recall limits: 24,000 response characters, 20 ids, 10 hits per page, 10,000 scanned entries, 256 entries per commit.
+- Recall limits: 24,000 response characters, 20 ids, 1 MiB per entry, 10 hits per call, 10,000 checked entries or 32 MiB per search, 50,000 walked entries, 64 entries per commit.
+- Recall walks from the newest entry down, so it sees every context edit in force (newest edit per target wins). It stops after the newest reset (`ResetEntry`, or `head === id`).
+- Recall output: a quoted-data preamble, then entries between `<<<key ...>>>` and `<<<key end>>>` with a random key per call. Search hits are JSON-string snippets in one keyed block.
+- Search pages with `before` (an entry id), not page numbers, so a compaction between calls does not shift pages.
+- Recall drops `aborted`, `error`, and `deferred` assistant messages and hides thinking, like Pi Durable's context.
 - PiP sessions are skipped through `host.pip.ownerOf`. A missing API declines visibly.
 - Failures return `{ decline: true }` with a session notice. There is never a model fallback.

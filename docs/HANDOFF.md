@@ -7,3 +7,5 @@ Build in this standalone folder. Do not edit the live Pocket repository at /User
 References: Pocket docs/index.md, extensions.md, self-editing.md, map.md, architecture.md. Installed Blackhole: /Users/theskumar/.pi/agent/npm/node_modules/pi-blackhole (0.5.11, MIT). Pi Durable beforeCompact hook can provide a deterministic summary. Need bundle only compiler dependency graph, never package entry or memory runtime. Preserve upstream license. No hallucinated recall tool references.
 
 This handoff records scope outside cowork-kb; no wiki writes authorized.
+
+Superseded (0.2.0 and later): the owner asked for a recall tool. Refs are real Pocket entry ids, and `blackhole_recall` resolves them, so they are not hallucinated. The module is public at theskumar/pi-pocket-blackhole. See README.md and docs/REVIEW.md.
