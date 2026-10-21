@@ -6,28 +6,15 @@ This list comes from three reviews in October 2026: a comparison with upstream p
 
 Effort: **S** is under a day, **M** is a few days, **L** is a week or more.
 
-## Next: 0.4.0, keep long sessions working
+## Next: 0.4.x, better summaries and recall
 
-Today the summary has two limits: 1 MiB of characters (about 250k tokens), and it must be smaller than what it replaces. Neither one knows the model's context window. A long session's summary can grow until the summary plus the kept tail no longer fits, and every turn then overflows. 0.3.0 added segment markers and `/blackhole-status`, so growth is visible and segments can be split. These items act on it.
+### Recall `ids` parity (S)
 
-### Growth notice (S)
+`ids` still returns system-role parts, which `range` and search skip. Recall can also return a tool result that Pi Durable's `orderToolResults` drops for lack of a matching call. Filter both, as Pi sees them.
 
-Send a short notice to the session when the summary passes a share of the context window, such as "summary about 60k tokens (30% of the window)". Once per threshold, not after every compaction: 0.2.2 cut repeated notices, and Pocket already says "Compacted." after a manual compaction.
+### Tune the shrink threshold (S)
 
-### Shrink the summary by the context window (M)
-
-When the summary passes a share of the model's context window, or the compaction reason is `overflow`, cut the brief transcript out of the oldest Blackhole segments first.
-
-- **Keep:** each segment's header sections (goals, files, commits, errors, preferences), and all native prose.
-- **Leave:** one pointer line per cut, such as `brief omitted: #e120..#e480, use blackhole_recall`. Recall still returns the full text.
-- **Budget:** a fraction of `contextWindow` from the hook API's `models.getModel`. The hook cannot read `reserveTokens`.
-- **Segments:** split on verified 0.3.0 marker lines (`summaryShape` gives each segment's `start` and `end`). Text before the first verified marker (native prose, or 0.2.x segments) is never cut.
-- **Forged markers:** text from before 0.3.0 never went through `unmark`, and the hash is public. Before cutting, check that a segment's range holds entries of this session, and cut only segments after the newest Blackhole-written summary began.
-- **Pointer:** a range such as `#e120..#e480` cannot be followed today. Entry ids are global, and recall takes at most 20 ids. Add a recall option that pages through this session's own entries in an id range, such as `range: [120, 480]`, and point to it.
-- **Changes a promise:** the README says that earlier summaries stay byte-for-byte. Rewrite it as "native prose stays byte-for-byte; Blackhole segments can shrink, and recall restores them".
-- **Upstream:** rebase on overflow, on capacity pressure, and when the chain passes window/8 (`compaction-chain.ts`).
-
-## Then: 0.4.x, better summaries and recall
+0.4.0 trims above an eighth of the window (half on overflow), down to 70%. Check real sessions with `/blackhole-status` and adjust. Header sections still grow without a cap; the next item addresses that.
 
 ### Merge old segments' header sections (M)
 

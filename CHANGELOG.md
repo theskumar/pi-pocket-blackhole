@@ -2,6 +2,27 @@
 
 What changed in each version, in plain terms. Newest first.
 
+## 0.4.0 (2026-10-21)
+
+Long sessions keep working: the summary now trims old history instead of growing until compaction fails.
+
+### Added
+
+- **Old transcripts get trimmed.** When the summary passes an eighth of the model's context window, the message-by-message transcript of its oldest parts becomes one line: `[Brief omitted: 42 messages. If needed, read them with blackhole_recall range [120, 480].]`. Goals, files, commits and the other headers stay, and so does the newest part. It trims down to 70% of the budget, so the next few compactions leave the top of the summary alone and the prompt cache keeps working.
+- **Recall by range.** `blackhole_recall` takes `range: [from, to]` and returns that part of the session in order, a page at a time. Pi follows the "Brief omitted" line with it.
+- **Notices.** One short note says when older history was trimmed. If the summary is still over twice the budget, a warning suggests `/reset`, or turning Blackhole off for one compaction. Each shows at most once per session in 30 minutes.
+
+### Changed
+
+- **Fewer declines.** A summary over 1 MiB, or one that wouldn't save tokens, now trims old transcripts first, and the newest part last. It declines only if that isn't enough.
+- **Earlier summaries can change.** Before, older parts stayed byte-for-byte forever. Now a Blackhole part can lose its transcript. Text the model summarizer wrote, and anything from before 0.3.0, still never changes.
+- `/blackhole-status` marks trimmed parts `transcript omitted`.
+- The recall note at the end of each summary now mentions `range`.
+
+### Updating
+
+Copy `blackhole.ts`. The files in `blackhole/` did not change, so no restart is needed.
+
 ## 0.3.0 (2026-10-21)
 
 See how big a session's summary is getting, before it becomes a problem.

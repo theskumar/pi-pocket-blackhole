@@ -16,7 +16,7 @@ Durable facts for maintaining this adapter. One fact per line.
 
 ## Build and test
 
-- Test: `npm test` (25 tests, about 15 s, real Pocket helpers, faux provider, no network).
+- Test: `npm test` (30 tests, about 15 s, real Pocket helpers, faux provider, no network).
 - Build: `npm run setup:build` once (pinned inputs into `build/node_modules/`), then `npm run build`. It rewrites `compiler-provenance.json`.
 - `~/.pi/agent/npm/node_modules/pi-blackhole` is 0.5.13 now; never build from it. `build.mjs` refuses versions other than 0.5.11.
 - Rebuilt bundle code is identical to the reviewed 0.5.11 bundle; only path comments and the banner changed.
@@ -78,7 +78,10 @@ Durable facts for maintaining this adapter. One fact per line.
 - Queries have at most `MAX_TERMS` (16) words. Inline image data counts toward `MAX_SCAN_CHARS`.
 - The gallery description must stay at or under 600 characters; a test checks it.
 - Segment markers: `[Blackhole segment N · <range> · M messages · h<sha8>]`, after SEPARATOR or at the body start (`SEGMENT_LINE`). Verified only when the hash matches the text up to the next marker line. N = verified count in `previous` + 1 (`parseSegments`, never strip `previous` twice). `unmark` escapes the opening in new segments.
-- `/blackhole-status` (scope `conversation`, a card for everyone in the session). Finds the head with `tx.latestHeadMarker`, then walks only newer entries (max 5,000 messages). One `State` per loaded version is shared by the hook and the command: `warned`, `declined` (with `upTo`, hidden after a newer head), `windows`. All in memory, all safe to lose, each capped at `MAX_REMEMBERED`.
+- `/blackhole-status` (scope `conversation`, a card for everyone in the session). Finds the head with `tx.latestHeadMarker`, then walks only newer entries (max 5,000 messages). One `State` per loaded version is shared by the hook and the command: `warned`, `declined` (with `upTo`, hidden after a newer head), `windows`, `shrunkNoticed`, `overNoticed`. All in memory, all safe to lose, each capped at `MAX_REMEMBERED`.
 - Only `Decline` errors (the module's own fixed reasons) reach the session and the card. Others show as "internal error"; details go server-wide via `host.notice` without a conversation id, under the same rate limit.
+- Shrink (0.4.0): `shrink(body, hard, soft, oldOk)` parses once, then cuts briefs to `[Brief omitted: …]` pointers, oldest verified segment first. `soft` (budget = window × SUMMARY_SHARE 1/8, half on overflow; once over, down to SHRINK_TO 0.7) never cuts the newest segment; `hard` (≤ 1 MiB, < replaced tokens) cuts it last. Unknown window + overflow: every older brief. `oldOk` = previous summary ended with our note; it lasts one compaction, then trust returns (forging needs a separator plus a marker line; message text is flattened, and `defangArgs` turns SEPARATOR in tool-call arguments into `- - -` for the compiler only).
+- `splitBrief` relies on the compiler's layout: header sections, SEPARATOR, brief opening (`[user]`, `[assistant]`, `[tool_error] `, `...(N earlier lines omitted)`). Paths in headers are not flattened by the compiler, hence `defangArgs`; `splitBrief` also requires a brief opening after the split.
+- Recall `range: [from, to]` walks newest first and keeps only the oldest page (RANGE_ENTRY_CHARS 3,000 per entry, RANGE_OVERHEAD 600 reserved); `More:` starts after the last shown id. Caps: 10,000 entries or 32 MiB of text (images counted), then it names the unchecked span; past the 50,000-entry walk cap it says "Not checked".
 - `pipCheck(host, id)` is the one PiP check: hook, recall, and status all fail closed on `missing`.
 - Commands get no model registry: the hook learns `contextWindow` via `api.models.getModel` (read only, never fails the compaction). The test stub allows `getModel` and throws on other `models` access.
